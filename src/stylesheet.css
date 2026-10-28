@@ -1,0 +1,65 @@
+/* Dynamic Notch - Simple Clock */
+
+.dn-notch {
+    color: #ffffff;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.dn-notch-apple {
+    box-shadow: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: none;
+}
+
+.dn-notch-pill {
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.dn-box {
+    margin: 0;
+    padding: 0;
+}
+
+.dn-clock-widget {
+    spacing: 8px;
+    padding: 0 12px;
+}
+
+.dn-clock-time {
+    font-weight: 600;
+    font-size: 11pt;
+    text-align: center;
+}
+
+.dn-clock-date {
+    font-size: 11pt;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+}
+
+.dn-expanded-clock {
+    font-weight: 600;
+    font-size: 32pt;
+    font-family: monospace;
+    text-align: center;
+    padding: 16px;
+}
+
+#panel.transparent-top-bar,
+.transparent-top-bar {
+    background-color: transparent !important;
+    background-image: none !important;
+    background-gradient-direction: none !important;
+    box-shadow: none !important;
+}
+
+#panel.transparent-top-bar .panel-corner,
+.transparent-top-bar .panel-corner {
+    -panel-corner-background-color: transparent !important;
+    -panel-corner-border-color: transparent !important;
+}
+
+#panel.transparent-top-bar:overview,
+.transparent-top-bar:overview {
+    background-color: transparent !important;
+}

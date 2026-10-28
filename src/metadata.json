@@ -1,0 +1,8 @@
+{
+    "uuid": "dynamic-notch@local",
+    "name": "Dynamic Notch",
+    "description": "Top-center notch/pill replacing the stock clock menu: combined custom panel with media controls, calendar and notifications, live activities (music, file transfers, battery), and a configurable panel background. GNOME Shell 51.",
+    "shell-version": ["51"],
+    "settings-schema": "org.gnome.shell.extensions.dynamic-notch",
+    "version": 1
+}

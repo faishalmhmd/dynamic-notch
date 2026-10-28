@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
+    <value nick="apple" value="0"/>
+    <value nick="pill" value="1"/>
+  </enum>
+  <enum id="org.gnome.shell.extensions.dynamic-notch.Position">
+    <value nick="top" value="0"/>
+    <value nick="bottom" value="1"/>
+    <value nick="left" value="2"/>
+    <value nick="right" value="3"/>
+  </enum>
+  <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
+    <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
+      <default>'apple'</default>
+      <summary>Notch style: apple (mac mode) or pill</summary>
+    </key>
+    <key name="pill-position" enum="org.gnome.shell.extensions.dynamic-notch.Position">
+      <default>'top'</default>
+      <summary>Pill position: top, bottom, left, or right</summary>
+    </key>
+    <key name="notch-width" type="i">
+      <range min="120" max="600"/>
+      <default>200</default>
+      <summary>Notch width in pixels</summary>
+    </key>
+    <key name="notch-height" type="i">
+      <range min="30" max="100"/>
+      <default>34</default>
+      <summary>Notch height in pixels</summary>
+    </key>
+    <key name="notch-radius" type="i">
+      <range min="0" max="40"/>
+      <default>18</default>
+      <summary>Notch corner radius in pixels</summary>
+    </key>
+    <key name="notch-bg" type="s">
+      <default>'rgb(0,0,0)'</default>
+      <summary>Notch background color (CSS color string)</summary>
+    </key>
+    <key name="transparent-panel" type="b">
+      <default>false</default>
+      <summary>Make the top panel transparent when no window is near it</summary>
+    </key>
+  </schema>
+</schemalist>
