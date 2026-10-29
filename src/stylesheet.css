@@ -1,13 +1,6 @@
 /* Dynamic Notch — GNOME Shell 51 */
 
-/* ---- Top panel -------------------------------------------------------
-   The transition lives here, not in JS. JS only changes the panel's
-   classes / inline background-color when the desired appearance really
-   changes; St animates background-color between the old and the new
-   computed value because of this transition-duration. The old build
-   re-applied an !important inline style on every window allocation
-   event, which restarted/snapped this transition constantly (flicker
-   after opening/closing the Overview). */
+/* ---- Top panel ---- */
 
 #panel {
     transition-duration: 300ms;
@@ -25,8 +18,6 @@
     -panel-corner-border-color: transparent;
 }
 
-/* Panel foreground. `color` on the buttons recolors their labels and
-   their symbolic icons (icons follow the actor's foreground color). */
 #panel.dn-fg-light {
     color: #f5f5f7;
 }
@@ -43,9 +34,7 @@
     color: #1b1b1f;
 }
 
-/* Legacy class from older builds — kept so a panel still carrying it
-   (e.g. after an update without a Shell restart) stays transparent
-   instead of snapping back. */
+/* Legacy class from older builds, kept so an already-styled panel stays transparent. */
 #panel.transparent-top-bar {
     background-color: transparent;
     background-image: none;
@@ -88,11 +77,6 @@
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
-.dn-box {
-    margin: 0;
-    padding: 0;
-}
-
 /* ---- Compact view ----------------------------------------------------- */
 
 .dn-clock-widget {
@@ -116,45 +100,291 @@
     color: rgba(0, 0, 0, 0.6);
 }
 
-/* ---- Expanded view ---------------------------------------------------- */
+.dn-chip {
+    spacing: 4px;
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    padding: 2px 7px;
+}
+
+.dn-fg-dark .dn-chip {
+    background-color: rgba(0, 0, 0, 0.12);
+}
+
+.dn-chip-label {
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+/* ---- Peek view (notification / timer finished) ------------------------ */
+
+.dn-peek {
+    spacing: 10px;
+    padding: 10px 16px;
+}
+
+.dn-peek-title {
+    font-weight: 700;
+    font-size: 10.5pt;
+}
+
+.dn-peek-body {
+    font-size: 10pt;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.dn-fg-dark .dn-peek-body {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+/* ---- Expanded view: 5x5 grid ------------------------------------------ */
 
 .dn-expanded {
-    padding: 14px 16px;
-    spacing: 10px;
+    padding: 0;
 }
 
-.dn-expanded-head {
-    spacing: 2px;
-    padding-bottom: 2px;
+.dn-grid {
+    padding: 12px;
 }
 
-.dn-expanded-clock {
-    font-weight: 600;
-    font-size: 30pt;
-    font-family: monospace;
+.dn-corner-clock {
+    font-weight: 700;
+    font-size: 16pt;
     text-align: center;
 }
 
-.dn-expanded-date {
-    font-size: 10pt;
+.dn-corner-date {
+    font-size: 9pt;
     color: rgba(255, 255, 255, 0.7);
     text-align: center;
 }
 
-.dn-fg-dark .dn-expanded-date {
+.dn-fg-dark .dn-corner-date {
     color: rgba(0, 0, 0, 0.6);
 }
 
-.dn-cards-row {
-    spacing: 10px;
+/* Area 1: quick actions */
+.dn-qa-row {
+    spacing: 8px;
 }
 
+.dn-qa-button {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 7px 10px;
+}
+
+.dn-qa-button:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.dn-qa-button.dn-qa-active {
+    background-color: rgba(255, 255, 255, 0.28);
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+.dn-fg-dark .dn-qa-button {
+    background-color: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-fg-dark .dn-qa-button.dn-qa-active {
+    background-color: rgba(0, 0, 0, 0.22);
+}
+
+.dn-qa-content {
+    spacing: 6px;
+}
+
+.dn-qa-label {
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+
+/* Shared small button (calendar nav, Clear notifications) */
+.dn-small-button {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+.dn-small-button:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.dn-fg-dark .dn-small-button {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+/* Area 2: calendar */
+.dn-cal-area {
+    min-width: 252px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 10px;
+    spacing: 6px;
+}
+
+.dn-fg-dark .dn-cal-area {
+    background-color: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.07);
+}
+
+.dn-cal-header {
+    spacing: 6px;
+}
+
+.dn-cal-weekdays {
+    spacing: 2px;
+}
+
+.dn-cal-weekday {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.55);
+    text-align: center;
+}
+
+.dn-fg-dark .dn-cal-weekday {
+    color: rgba(0, 0, 0, 0.5);
+}
+
+.dn-cal-cell {
+    border-radius: 7px;
+    padding: 3px 0;
+}
+
+.dn-cal-cell:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.dn-cal-cell-label {
+    font-size: 9.5pt;
+    text-align: center;
+}
+
+.dn-cal-dim .dn-cal-cell-label {
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.dn-fg-dark .dn-cal-dim .dn-cal-cell-label {
+    color: rgba(0, 0, 0, 0.35);
+}
+
+.dn-cal-cell.dn-cal-today {
+    background-color: rgba(255, 255, 255, 0.22);
+    font-weight: 700;
+}
+
+.dn-cal-cell.dn-cal-selected {
+    border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.dn-fg-dark .dn-cal-cell.dn-cal-selected {
+    border-color: rgba(0, 0, 0, 0.5);
+}
+
+.dn-cal-cell.dn-cal-has-events .dn-cal-cell-label {
+    font-weight: 700;
+    text-decoration: underline;
+}
+
+.dn-cal-events-title {
+    font-size: 9pt;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.6);
+    padding-top: 4px;
+}
+
+.dn-fg-dark .dn-cal-events-title {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+.dn-cal-event {
+    font-size: 9pt;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.dn-fg-dark .dn-cal-event {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+/* Area 3: notifications */
+.dn-notif-area {
+    min-width: 250px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 10px;
+    spacing: 8px;
+}
+
+.dn-fg-dark .dn-notif-area {
+    background-color: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.07);
+}
+
+.dn-notif-header {
+    spacing: 6px;
+}
+
+.dn-notif-count {
+    font-size: 9.5pt;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.dn-fg-dark .dn-notif-count {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+.dn-notif-list {
+    spacing: 6px;
+}
+
+.dn-notif-item {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 9px;
+    padding: 7px 9px;
+    text-align: left;
+}
+
+.dn-notif-item:hover {
+    background-color: rgba(255, 255, 255, 0.13);
+}
+
+.dn-fg-dark .dn-notif-item {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+.dn-notif-row {
+    spacing: 8px;
+}
+
+.dn-notif-item-title {
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+
+.dn-notif-item-sub {
+    font-size: 8.5pt;
+    color: rgba(255, 255, 255, 0.65);
+}
+
+.dn-fg-dark .dn-notif-item-sub {
+    color: rgba(0, 0, 0, 0.6);
+}
+
+/* Small cards (areas 5-13) */
 .dn-card {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 12px;
-    padding: 10px 12px;
-    spacing: 6px;
+    padding: 9px 11px;
+    spacing: 5px;
 }
 
 .dn-fg-dark .dn-card {
@@ -163,16 +393,16 @@
 }
 
 .dn-card-head {
-    spacing: 8px;
+    spacing: 7px;
 }
 
 .dn-card-title {
     font-weight: 700;
-    font-size: 10.5pt;
+    font-size: 10pt;
 }
 
 .dn-card-body {
-    font-size: 9.5pt;
+    font-size: 9pt;
     color: rgba(255, 255, 255, 0.75);
 }
 
@@ -183,8 +413,8 @@
 .dn-note-entry {
     background-color: rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    padding: 6px 8px;
-    font-size: 9.5pt;
+    padding: 5px 8px;
+    font-size: 9pt;
     selection-background-color: rgba(255, 255, 255, 0.3);
     selected-color: #ffffff;
 }
@@ -195,22 +425,184 @@
     selected-color: #000000;
 }
 
-.dn-card-button {
+/* Timer strip */
+.dn-timer-strip {
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 9px 12px;
+    spacing: 14px;
+}
+
+.dn-fg-dark .dn-timer-strip {
+    background-color: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.07);
+}
+
+.dn-timer-left {
+    spacing: 6px;
+}
+
+.dn-timer-entry {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 9.5pt;
+    min-width: 150px;
+    selection-background-color: rgba(255, 255, 255, 0.3);
+    selected-color: #ffffff;
+}
+
+.dn-fg-dark .dn-timer-entry {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-time-entry {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 7px;
+    padding: 4px 6px;
+    font-size: 9.5pt;
+    min-width: 34px;
+    selection-background-color: rgba(255, 255, 255, 0.3);
+    selected-color: #ffffff;
+}
+
+.dn-fg-dark .dn-time-entry {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-preset-row {
+    spacing: 5px;
+}
+
+.dn-preset-button {
+    background-color: rgba(255, 255, 255, 0.09);
+    border-radius: 7px;
+    padding: 3px 9px;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+.dn-preset-button:hover {
+    background-color: rgba(255, 255, 255, 0.16);
+}
+
+.dn-preset-button.dn-preset-active {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+.dn-fg-dark .dn-preset-button {
+    background-color: rgba(0, 0, 0, 0.07);
+}
+
+.dn-fg-dark .dn-preset-button.dn-preset-active {
+    background-color: rgba(0, 0, 0, 0.2);
+}
+
+.dn-timer-count {
+    font-weight: 700;
+    font-size: 17pt;
+    font-family: monospace;
+    text-align: center;
+}
+
+.dn-timer-controls {
+    spacing: 6px;
+    padding-left: 8px;
+}
+
+.dn-apps-strip {
+    spacing: 10px;
+}
+
+.dn-apps-title {
+    font-weight: 700;
+    font-size: 10pt;
+}
+
+.dn-apps-row {
+    spacing: 6px;
+}
+
+.dn-app-entry {
+    spacing: 2px;
+}
+
+.dn-app-button {
+    border-radius: 9px;
+    padding: 4px 8px;
+    min-width: 64px;
+    max-width: 96px;
+}
+
+.dn-app-button:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.dn-fg-dark .dn-app-button:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-app-name {
+    font-size: 8pt;
+}
+
+.dn-app-minis {
+    spacing: 3px;
+}
+
+.dn-app-mini {
+    border-radius: 6px;
+    padding: 3px;
+}
+
+.dn-app-mini:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.dn-fg-dark .dn-app-mini:hover {
+    background-color: rgba(0, 0, 0, 0.12);
+}
+
+.dn-app-mini.dn-kill-armed {
+    background-color: rgba(224, 27, 36, 0.85);
+    color: #ffffff;
+}
+
+.dn-apps-more {
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+.dn-apps-overview {
+    border-radius: 10px;
+    padding: 8px;
+}
+
+.dn-apps-overview:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.dn-fg-dark .dn-apps-overview:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-timer-button {
     background-color: rgba(255, 255, 255, 0.12);
     border-radius: 8px;
-    padding: 4px 12px;
+    padding: 5px 12px;
     font-size: 9.5pt;
     font-weight: 600;
 }
 
-.dn-card-button:hover {
+.dn-timer-button:hover {
     background-color: rgba(255, 255, 255, 0.2);
 }
 
-.dn-fg-dark .dn-card-button {
+.dn-fg-dark .dn-timer-button {
     background-color: rgba(0, 0, 0, 0.1);
 }
 
-.dn-fg-dark .dn-card-button:hover {
+.dn-fg-dark .dn-timer-button:hover {
     background-color: rgba(0, 0, 0, 0.18);
 }
