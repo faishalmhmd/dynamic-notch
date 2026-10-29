@@ -26,12 +26,6 @@
     <value nick="light" value="1"/>
     <value nick="dark" value="2"/>
   </enum>
-  <!-- BARU (v4): mode layout expanded panel. -->
-  <enum id="org.gnome.shell.extensions.dynamic-notch.LayoutMode">
-    <value nick="full" value="0"/>
-    <value nick="split" value="1"/>
-    <value nick="custom" value="2"/>
-  </enum>
   <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
     <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
       <default>'apple'</default>
@@ -87,46 +81,18 @@
       <default>'auto'</default>
       <summary>Notch text color: auto (from the notch background color), light, or dark</summary>
     </key>
-    <!-- BARU (v4): layout system. enabled-widgets / widget-order /
-         wide-widgets hanya berlaku di mode custom; full dan split
-         adalah preset tetap. Id widget: actions, calendar,
-         notifications, timer (area) dan notes, timer-summary,
-         activity, clipboard, status, upcoming, shortcuts, focus,
-         media (kartu kecil). -->
-    <key name="layout-mode" enum="org.gnome.shell.extensions.dynamic-notch.LayoutMode">
-      <default>'full'</default>
-      <summary>Expanded layout mode: full, split, or custom</summary>
+    <!-- BARU (v6): quick action ikon yang tampil di top bar panel
+         expanded, sesuai urutan array. Id: dnd, timer, today,
+         clear, settings. Ini SATU-SATUNYA kustomisasi tampilan;
+         layout expanded sendiri tetap dan tidak bisa diatur. -->
+    <key name="quick-actions" type="as">
+      <default>['dnd', 'timer', 'today', 'clear', 'settings']</default>
+      <summary>Quick action icon ids shown in the expanded top bar, in order</summary>
     </key>
-    <key name="grid-gap" type="i">
-      <range min="2" max="24"/>
-      <default>8</default>
-      <summary>Gap between grid cells in the expanded layout, in pixels</summary>
-    </key>
-    <key name="expanded-width" type="i">
-      <range min="640" max="1600"/>
-      <default>1024</default>
-      <summary>Expanded island width in pixels (clamped to the monitor)</summary>
-    </key>
-    <key name="expanded-height" type="i">
-      <range min="400" max="900"/>
-      <default>560</default>
-      <summary>Expanded island height in pixels (clamped to the monitor)</summary>
-    </key>
-    <key name="enabled-widgets" type="as">
-      <default>['actions', 'calendar', 'notifications', 'timer', 'notes', 'timer-summary', 'activity', 'clipboard', 'status', 'upcoming', 'shortcuts', 'focus', 'media']</default>
-      <summary>Widget ids shown in Custom layout mode</summary>
-    </key>
-    <key name="widget-order" type="as">
-      <default>['notes', 'timer-summary', 'activity', 'clipboard', 'status', 'upcoming', 'shortcuts', 'focus', 'media']</default>
-      <summary>Small-card order in Custom layout mode</summary>
-    </key>
-    <key name="wide-widgets" type="as">
-      <default>[]</default>
-      <summary>Small-card ids spanning two columns in Custom layout mode</summary>
-    </key>
-    <!-- BARU (v4): default editor timer, dipulihkan saat enable dan
-         dipakai tombol Reset di strip timer. Bukan state countdown:
-         timer yang sedang berjalan tidak selamat dari restart Shell. -->
+    <!-- BARU (v4): default editor timer, dimuat saat enable dan
+         disimpan kembali saat Play ditekan dari keadaan idle.
+         Bukan state countdown: timer yang sedang berjalan tidak
+         selamat dari restart Shell. -->
     <key name="timer-title" type="s">
       <default>'Focus Timer'</default>
       <summary>Default timer title</summary>
