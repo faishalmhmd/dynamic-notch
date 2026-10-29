@@ -113,6 +113,7 @@ export default class DynamicNotchExtension extends Extension {
         this._qaButtons = new Map();
         this._tabEntryBtns = [];
         this._scriptProcs = new Set();
+        this._peekKind = 'notification';
 
         // Running apps (AppSystem signals, failure-isolated)
         this._appSystem = null;
@@ -377,6 +378,18 @@ export default class DynamicNotchExtension extends Extension {
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._timerChip.add_child(this._timerChipLabel);
+        this._timerProgressTrack = new St.Widget({
+            layout_manager: new Clutter.FixedLayout(),
+            style_class: 'dn-progress-track',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._timerProgressTrack.set_size(56, 4);
+        this._timerProgressFill = new St.Widget({
+            style: 'background-color: #2ec27e; border-radius: 999px;',
+        });
+        this._timerProgressFill.set_size(0, 4);
+        this._timerProgressTrack.add_child(this._timerProgressFill);
+        this._timerChip.add_child(this._timerProgressTrack);
         this._clockWidget.add_child(this._timerChip);
 
         this._notifChip = new St.BoxLayout({
@@ -532,13 +545,27 @@ export default class DynamicNotchExtension extends Extension {
 
         this._pageTimer = new St.BoxLayout({
             style_class: 'dn-page-timer',
+            orientation: Clutter.Orientation.VERTICAL,
             y_expand: true,
             visible: false,
         });
         const timerStrip = this._buildTimerStrip();
         timerStrip.x_expand = true;
+        timerStrip.y_expand = true;
         timerStrip.y_align = Clutter.ActorAlign.CENTER;
         this._pageTimer.add_child(timerStrip);
+        this._tabProgressTrack = new St.Widget({
+            layout_manager: new Clutter.FixedLayout(),
+            style_class: 'dn-progress-track',
+            x_expand: true,
+        });
+        this._tabProgressTrack.set_height(4);
+        this._tabProgressFill = new St.Widget({
+            style: 'background-color: #2ec27e; border-radius: 999px;',
+        });
+        this._tabProgressFill.set_size(0, 4);
+        this._tabProgressTrack.add_child(this._tabProgressFill);
+        this._pageTimer.add_child(this._tabProgressTrack);
         root.add_child(this._pageTimer);
         this._setTab('main');
         return root;
@@ -1539,6 +1566,28 @@ export default class DynamicNotchExtension extends Extension {
         return this._state === State.EXPANDING || this._state === State.EXPANDED;
     }
 
+    // Natural length of the compact content: the visible children's
+    // requisitions + CSS spacing 8px and horizontal padding 24px.
+    _compactContentLength() {
+        if (!this._clockWidget)
+            return 0;
+        const vertical =
+            this._clockWidget.orientation === Clutter.Orientation.VERTICAL;
+        let total = 0, count = 0;
+        for (const child of this._clockWidget.get_children()) {
+            if (!child.visible)
+                continue;
+            const [, nat] = vertical
+                ? child.get_preferred_height(-1)
+                : child.get_preferred_width(-1);
+            total += nat;
+            count++;
+        }
+        if (count === 0)
+            return 0;
+        return total + 8 * (count - 1) + (vertical ? 0 : 24);
+    }
+
     _expandedDims(monitor) {
         if (this._page === 'timer')
             return this._timerTabDims(monitor);
@@ -1615,18 +1664,16 @@ export default class DynamicNotchExtension extends Extension {
         const expanded = this._targetExpanded();
         const peek = !expanded && this._peekActive && this._state === State.COMPACT;
 
-        // Collapsed pill (not the apple style): length follows the
-        // clock content's natural size, measured in its orientation.
+        // Collapsed pill (not apple): configured width, raised to
+        // the children's natural size when the content needs more.
         let dynLen = 0;
         if (!expanded && !peek && style !== 0 && this._clockWidget) {
             const vertical = position === 2 || position === 3;
             this._clockWidget.orientation = vertical
                 ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
-            const [, nat] = vertical
-                ? this._clockWidget.get_preferred_height(-1)
-                : this._clockWidget.get_preferred_width(-1);
+            const nat = this._compactContentLength();
             if (nat > 0)
-                dynLen = Math.min(Math.max(nat + 16, 120),
+                dynLen = Math.min(Math.max(nat + 16, w, 120),
                     monitor.width - 16);
         }
 
@@ -1679,8 +1726,8 @@ export default class DynamicNotchExtension extends Extension {
         // Apple style (and any pill measurement failure) keeps the
         // configured width; live chips may still widen it to fit.
         if (!expanded && !peek && dynLen === 0 &&
-            (this._timerChip?.visible || this._notifChip?.visible)) {
-            const [, nat] = this._clockWidget.get_preferred_width(-1);
+            (this._timerState !== 'idle' || this._notifChip?.visible)) {
+            const nat = this._compactContentLength();
             if (nat > 0)
                 notchW = Math.max(notchW, Math.min(nat + 8, monitor.width - 16));
         }
@@ -1828,7 +1875,7 @@ export default class DynamicNotchExtension extends Extension {
     // ------------------------------------------------------------ peek
 
     _showPeek({gicon = null, iconName = 'dialog-information-symbolic',
-        title = '', body = ''}, durationMs) {
+        title = '', body = ''}, durationMs, kind = 'notification') {
         if (gicon) {
             this._peekIcon.gicon = gicon;
         } else {
@@ -1841,6 +1888,7 @@ export default class DynamicNotchExtension extends Extension {
         // The expanded panel already shows everything; no peek needed.
         if (this._state === State.EXPANDED || this._state === State.EXPANDING)
             return;
+        this._peekKind = kind;
         this._peekActive = true;
         // Arm the timeout in every state so a queued peek cannot get stuck.
         if (this._peekTimeoutId)
@@ -1865,6 +1913,7 @@ export default class DynamicNotchExtension extends Extension {
         if (!this._peekActive)
             return;
         this._peekActive = false;
+        this._updateCompactDisplay();
         if (this._state !== State.COMPACT)
             return;
         this._animOnDone = () => this._syncViews();
@@ -2327,7 +2376,7 @@ export default class DynamicNotchExtension extends Extension {
             iconName: 'alarm-symbolic',
             title: "Time's up!",
             body: this._timerTitle,
-        }, TIMER_PEEK_MS);
+        }, TIMER_PEEK_MS, 'timer-complete');
         if (this._timerFinishTimeoutId)
             GLib.source_remove(this._timerFinishTimeoutId);
         this._timerFinishTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT,
@@ -2364,16 +2413,55 @@ export default class DynamicNotchExtension extends Extension {
             entry.opacity = editable ? 255 : 140;
         }
 
-        // An active timer takes over the compact island; the clock
-        // stays in the expanded corner instead.
-        this._timerChip.visible = state !== 'idle';
         this._timerChipLabel.text = state === 'finished'
             ? "Time's up!"
-            : `${this._timerTitle} — ${this._fmtTimer(remain)}` +
+            : `${this._timerTitle} — ${this._fmtTimerHMS(remain)}` +
                 (state === 'paused' ? ' · Paused' : '');
-        if (this._clockTime)
-            this._clockTime.visible = state === 'idle';
+        // Progress from the monotonic remaining time (never tick-counted).
+        const frac = this._timerTotalSec > 0
+            ? Math.min(1, Math.max(0,
+                (this._timerTotalSec - remain) / this._timerTotalSec))
+            : 0;
+        this._setProgress(this._timerProgressFill, frac, 56);
+        if (this._tabProgressTrack)
+            this._setProgress(this._tabProgressFill, frac,
+                this._tabProgressTrack.get_width());
+        this._updateCompactDisplay();
         this._syncQaStates();
+    }
+
+    // Compact display priority: notification peek > timer > date.
+    _compactState() {
+        if (this._peekActive)
+            return this._peekKind ?? 'notification';
+        return this._timerState !== 'idle' ? 'timer' : 'date';
+    }
+
+    _updateCompactDisplay() {
+        if (!this._timerChip || !this._clockTime)
+            return;
+        const showTimer = this._timerState !== 'idle';
+        this._timerChip.visible = showTimer;
+        this._clockTime.visible = !showTimer;
+    }
+
+    // Smooth fill while running (1s linear ease per tick); frozen
+    // when paused/finished, instant when animations are disabled.
+    _setProgress(fill, frac, trackW) {
+        if (!fill || !(trackW > 0))
+            return;
+        const target = Math.round(trackW * frac);
+        fill.remove_all_transitions();
+        if (this._timerState === 'running' && this._animationsEnabled() &&
+            fill.width !== target) {
+            fill.ease({
+                width: target,
+                duration: 1000,
+                mode: Clutter.AnimationMode.LINEAR,
+            });
+        } else {
+            fill.set_size(target, 4);
+        }
     }
 
     // ------------------------------------------------------- quick actions

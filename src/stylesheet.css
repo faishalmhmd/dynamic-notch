@@ -160,6 +160,10 @@
     spacing: 6px;
 }
 
+.dn-page-timer {
+    spacing: 8px;
+}
+
 .dn-tab-bar {
     spacing: 2px;
     padding-left: 10px;
@@ -515,6 +519,15 @@
     font-size: 16pt;
     font-family: monospace;
     text-align: center;
+}
+
+.dn-progress-track {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+}
+
+.dn-fg-dark .dn-progress-track {
+    background-color: rgba(0, 0, 0, 0.14);
 }
 
 .dn-timer-count.dn-timer-running {

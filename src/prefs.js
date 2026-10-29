@@ -160,63 +160,10 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
                 return b;
             };
             entries.forEach((entry, idx) => {
-                const row = new Adw.ActionRow({
+                const row = new Adw.ExpanderRow({
                     title: tbTitle(entry),
-                    subtitle: `Position ${idx + 1} — icon: ${entry.icon ?? 'default'}`,
+                    subtitle: `Position ${idx + 1}`,
                 });
-                const iconEntry = new Gtk.Entry({
-                    text: entry.icon ?? '',
-                    placeholder_text: 'icon-name-symbolic',
-                    width_chars: 20,
-                    valign: Gtk.Align.CENTER,
-                });
-                iconEntry.connect('changed', () => {
-                    const arr = tbRead();
-                    if (arr[idx]) {
-                        arr[idx].icon = iconEntry.text.trim();
-                        tbWrite(arr);
-                    }
-                });
-                row.add_suffix(iconEntry);
-                if (entry.mode === 'script') {
-                    const pathEntry = new Gtk.Entry({
-                        text: entry.path ?? '',
-                        placeholder_text: '/home/user/script.sh',
-                        width_chars: 24,
-                        valign: Gtk.Align.CENTER,
-                    });
-                    pathEntry.connect('changed', () => {
-                        const arr = tbRead();
-                        if (arr[idx]) {
-                            arr[idx].path = pathEntry.text.trim();
-                            tbWrite(arr);
-                        }
-                    });
-                    row.add_suffix(pathEntry);
-                } else {
-                    const options = entry.mode === 'builtin'
-                        ? QA_TITLES : [['main', 'Main'], ['timer', 'Timer']];
-                    const drop = new Gtk.DropDown({
-                        model: Gtk.StringList.new(options.map(([, t]) => t)),
-                        valign: Gtk.Align.CENTER,
-                    });
-                    const curVal = entry.mode === 'builtin' ? entry.id : entry.tab;
-                    drop.selected = Math.max(0,
-                        options.findIndex(([v]) => v === curVal));
-                    drop.connect('notify::selected', () => {
-                        const arr = tbRead();
-                        if (!arr[idx])
-                            return;
-                        const val = options[drop.selected]?.[0];
-                        if (entry.mode === 'builtin')
-                            arr[idx].id = val;
-                        else
-                            arr[idx].tab = val;
-                        tbWrite(arr);
-                        rebuildTbRows();
-                    });
-                    row.add_suffix(drop);
-                }
                 row.add_suffix(mkBtn('go-up-symbolic', idx > 0, () => {
                     const arr = tbRead();
                     [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
@@ -236,10 +183,64 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
                     tbWrite(arr);
                     rebuildTbRows();
                 }));
+                const iconRow = new Adw.EntryRow({
+                    title: 'Icon Name (GNOME symbolic)',
+                });
+                iconRow.text = entry.icon ?? '';
+                iconRow.connect('notify::text', () => {
+                    const arr = tbRead();
+                    if (arr[idx]) {
+                        arr[idx].icon = iconRow.text.trim();
+                        tbWrite(arr);
+                    }
+                });
+                row.add_row(iconRow);
+                if (entry.mode === 'script') {
+                    const pathRow = new Adw.EntryRow({
+                        title: 'Script Path (absolute, executable)',
+                    });
+                    pathRow.text = entry.path ?? '';
+                    pathRow.connect('notify::text', () => {
+                        const arr = tbRead();
+                        if (arr[idx]) {
+                            arr[idx].path = pathRow.text.trim();
+                            tbWrite(arr);
+                        }
+                    });
+                    row.add_row(pathRow);
+                } else {
+                    const options = entry.mode === 'builtin'
+                        ? QA_TITLES : [['main', 'Main'], ['timer', 'Timer']];
+                    const targetRow = new Adw.ComboRow({
+                        title: entry.mode === 'builtin'
+                            ? 'Built-in Action' : 'Target Tab',
+                        model: Gtk.StringList.new(options.map(([, t]) => t)),
+                    });
+                    const curVal = entry.mode === 'builtin'
+                        ? entry.id : entry.tab;
+                    targetRow.selected = Math.max(0,
+                        options.findIndex(([v]) => v === curVal));
+                    targetRow.connect('notify::selected', () => {
+                        const arr = tbRead();
+                        if (!arr[idx])
+                            return;
+                        const val = options[targetRow.selected]?.[0];
+                        if (entry.mode === 'builtin')
+                            arr[idx].id = val;
+                        else
+                            arr[idx].tab = val;
+                        tbWrite(arr);
+                        rebuildTbRows();
+                    });
+                    row.add_row(targetRow);
+                }
                 qaGroup.add(row);
                 tbRows.push(row);
             });
-            const addRow = new Adw.ActionRow({title: 'Add Icon'});
+            const addRow = new Adw.ActionRow({
+                title: 'Add Icon',
+                subtitle: 'Restore resets all icons to the defaults',
+            });
             const mkAdd = (label, entry) => {
                 const b = new Gtk.Button({
                     label,
