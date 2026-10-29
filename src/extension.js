@@ -386,6 +386,12 @@ export default class DynamicNotchExtension extends Extension {
         for (const cell of this._calCells ?? [])
             cell.button?.destroy();
         this._calCells = null;
+        for (const label of this._calWeekdayLabels ?? [])
+            label?.destroy();
+        this._calWeekdayLabels = null;
+        for (const label of this._calEventLabels ?? [])
+            label?.destroy();
+        this._calEventLabels = null;
         for (const btn of this._qaButtons?.values() ?? [])
             btn?.destroy();
         this._qaButtons?.clear();
@@ -424,6 +430,7 @@ export default class DynamicNotchExtension extends Extension {
         this._notifList?.destroy();
         this._appsRow?.destroy();
         this._tabBar?.destroy();
+        this._topBar?.destroy();
         this._qaBar?.destroy();
         this._pageMain?.destroy();
         this._pageTimer?.destroy();
@@ -463,6 +470,7 @@ export default class DynamicNotchExtension extends Extension {
         this._tooltip = null;
         this._appsRow = null;
         this._tabBar = null;
+        this._topBar = null;
         this._qaBar = null;
         this._pageMain = null;
         this._pageTimer = null;
@@ -966,8 +974,11 @@ export default class DynamicNotchExtension extends Extension {
     // ------------------------------------------------------------ tooltip
 
     _addTooltip(actor, text) {
-        actor.connect('enter-event', () => this._showTooltip(actor, text));
-        actor.connect('leave-event', () => this._hideTooltip());
+        const enterId = actor.connect('enter-event', () => this._showTooltip(actor, text));
+        const leaveId = actor.connect('leave-event', () => this._hideTooltip());
+        const ids = this._actorSignalIds.get(actor) ?? [];
+        ids.push(enterId, leaveId);
+        this._actorSignalIds.set(actor, ids);
     }
 
     _showTooltip(actor, text) {
