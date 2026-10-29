@@ -43,7 +43,10 @@ const QA_TITLES = [
 export default class DynamicNotchPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window) {
     const settings = this.getSettings();
-    const page = new Adw.PreferencesPage();
+    const page = new Adw.PreferencesPage({
+      title: "General",
+      icon_name: "preferences-system-symbolic",
+    });
     window.add(page);
 
     const toggle = (title, key) => {
@@ -98,16 +101,17 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       row.add_suffix(button);
       return row;
     };
-    // --- Top panel (GNOME panel itu sendiri) ---
+    // --- Top panel (the GNOME panel itself) ---
     const panel = new Adw.PreferencesGroup({
       title: "Top Panel",
       description:
-        "Background panel GNOME dan warna teks/ikonnya. " +
-        "Berlaku langsung, tanpa restart Shell. Transparent Panel " +
-        "adalah saklar bawaan: panel transparan selama tidak ada " +
-        "jendela yang menyentuhnya, lalu kembali ke background " +
-        "terpilih di bawah (Solid/Semi memakai warnanya, sisanya " +
-        "kembali ke tampilan stock).",
+        "The GNOME panel background and its text/icon " +
+        "color. Applies immediately, without restarting the " +
+        "Shell. Transparent Panel is the stock dynamic switch: " +
+        "the panel stays transparent while no window touches " +
+        "it, then falls back to the background selected below " +
+        "(Solid/Semi use their color, the others return to " +
+        "the stock appearance).",
     });
     panel.add(toggle("Transparent Panel", "transparent-panel"));
     panel.add(
@@ -133,7 +137,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       enumRow("Notch Style", "notch-style", [
         "Apple (Mac Mode)",
         "Pill",
-        "Apple (Mac, tanpa outside rounded)",
+        "Apple (Mac, no outside rounded)",
       ]),
     );
     style.add(
@@ -166,10 +170,10 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     const qaGroup = new Adw.PreferencesGroup({
       title: "Top Bar Icons",
       description:
-        "Ikon di top bar panel expanded. Setiap ikon " +
-        "bisa berupa aksi bawaan, pengalih tab, atau script " +
-        "(dijalankan langsung sebagai file executable, tanpa " +
-        "shell). Urutan baris menentukan urutan ikon.",
+        "Icons in the expanded panel top bar. Each " +
+        "icon can be a built-in action, a tab switch, or a " +
+        "script (run directly as an executable file, without " +
+        "a shell). Row order sets the icon order.",
     });
     page.add(qaGroup);
     const tbRows = [];
@@ -339,13 +343,16 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     rebuildTbRows();
 
     // ---------------- Timer & Clock page ----------------
-    const timerPage = new Adw.PreferencesPage();
+    const timerPage = new Adw.PreferencesPage({
+      title: "Timer & Clock",
+      icon_name: "alarm-symbolic",
+    });
     window.add(timerPage);
 
     const timerGroup = new Adw.PreferencesGroup({
       title: "Timer Defaults",
       description:
-        "Dimuat saat extension aktif sebagai nilai awal form timer. Countdown yang sedang berjalan tidak disimpan.",
+        "Loaded when the extension starts, as the timer form\u2019s initial values. A running countdown is not saved.",
     });
     const titleRow = new Adw.EntryRow({ title: "Default Timer Title" });
     settings.bind(
@@ -389,7 +396,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       new Adw.ActionRow({
         title: "Display Format",
         subtitle:
-          "HH:MM DD-MMM-YY — 24-hour, two-digit day, English month abbreviation, two-digit year. Dipakai di compact island dan panel expanded.",
+          "HH:MM DD-MMM-YY — 24-hour, two-digit day, English month abbreviation, two-digit year. Used in the compact island and the expanded panel.",
       }),
     );
     const previewRow = new Adw.ActionRow({ title: "Preview" });

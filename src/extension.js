@@ -270,6 +270,7 @@ export default class DynamicNotchExtension extends Extension {
 
     this._updatePanelAppearance();
     this._initProviders();
+    this._initClipboardWatch();
     this._initApps();
     this._renderCalendar();
     this._renderTimer();
@@ -341,6 +342,13 @@ export default class DynamicNotchExtension extends Extension {
       this._desktopNotifSettings.disconnect(this._dndChangedId);
     this._dndChangedId = 0;
     this._desktopNotifSettings = null;
+    if (this._selection && this._selectionChangedId) {
+      try {
+        this._selection.disconnect(this._selectionChangedId);
+      } catch (_e) {}
+    }
+    this._selectionChangedId = 0;
+    this._selection = null;
 
     this._removeOutsideHandlers();
 
@@ -527,18 +535,24 @@ export default class DynamicNotchExtension extends Extension {
     peekText.add_child(this._peekBody);
     this._peekView.add_child(peekText);
     this._peekCloseBtn = new St.Button({
-      style_class: "dn-qa-btn",
+      style_class: "dn-qa-button dn-close-btn",
       child: new St.Icon({
         icon_name: "window-close-symbolic",
-        icon_size: 14,
+        icon_size: 16,
       }),
       y_align: Clutter.ActorAlign.CENTER,
       accessible_name: "Dismiss notification",
     });
-    this._peekCloseBtn.connect("button-press-event", () => Clutter.EVENT_STOP);
-    this._peekCloseBtn.connect("clicked", () => this._dismissPeek());
+    // Close on PRESS itself, not only 'clicked': St.Button's
+    // clicked comes from a gesture a stopped press can starve.
+    this._peekCloseBtn.connect("button-press-event", () => {
+      this._requestClose();
+      return Clutter.EVENT_STOP;
+    });
+    this._peekCloseBtn.connect("clicked", () => this._requestClose());
     this._peekView.add_child(this._peekCloseBtn);
-    this._peekView.connect("button-press-event", () => {
+    this._peekView.connect("button-press-event", (_a, event) => {
+      if (event.get_source() === this._peekCloseBtn) return Clutter.EVENT_STOP;
       this._hidePeek();
       this._openPanel();
       return Clutter.EVENT_STOP;
@@ -847,6 +861,12 @@ export default class DynamicNotchExtension extends Extension {
       dndBtn.opacity = usable ? 255 : 110;
       dndBtn.style_class =
         "dn-qa-button" + (active ? " dn-qa-active dn-qa-dnd-on" : "");
+      // State reads from the icon alone: prohibition disc
+      // while off, slashed bell while Do Not Disturb is on.
+      if (dndBtn.child)
+        dndBtn.child.icon_name = active
+          ? "notifications-disabled-symbolic"
+          : "user-busy-symbolic";
     }
     const timerBtn = this._qaButtons.get("timer");
     if (timerBtn) {
@@ -1161,7 +1181,6 @@ export default class DynamicNotchExtension extends Extension {
       this._killArmTimeoutId = 0;
     }
     if (app.get_id() === "org.gnome.Shell.desktop" || pid <= 1) {
-      log("dynamic-notch: refusing to force kill a protected app");
       this._refreshApps();
       return;
     }
@@ -1316,15 +1335,15 @@ export default class DynamicNotchExtension extends Extension {
     });
     header.add_child(this._clearButton);
     const notifClose = new St.Button({
-      style_class: "dn-qa-btn",
+      style_class: "dn-qa-button dn-close-btn",
       child: new St.Icon({
         icon_name: "window-close-symbolic",
-        icon_size: 14,
+        icon_size: 16,
       }),
       accessible_name: "Close panel",
       y_align: Clutter.ActorAlign.CENTER,
     });
-    notifClose.connect("clicked", () => this._closePanel());
+    notifClose.connect("clicked", () => this._requestClose());
     header.add_child(notifClose);
     this._addTooltip(notifClose, "Close panel");
     box.add_child(header);
@@ -1437,16 +1456,16 @@ export default class DynamicNotchExtension extends Extension {
     });
     strip.add_child(this._timerLabel);
     const timerClose = new St.Button({
-      style_class: "dn-qa-btn",
+      style_class: "dn-qa-button dn-close-btn",
       child: new St.Icon({
         icon_name: "window-close-symbolic",
-        icon_size: 14,
+        icon_size: 16,
       }),
       accessible_name: "Close timer view",
       y_align: Clutter.ActorAlign.CENTER,
     });
     // Closes only the view — the timer itself keeps running.
-    timerClose.connect("clicked", () => this._closePanel());
+    timerClose.connect("clicked", () => this._requestClose());
     strip.add_child(timerClose);
     this._addTooltip(timerClose, "Close (timer keeps running)");
     this._syncDurationEntries();
@@ -1531,6 +1550,16 @@ export default class DynamicNotchExtension extends Extension {
     this._installOutsideHandlers();
   }
 
+  // The one close entry: every × button calls exactly what an
+  // outside click calls, so close always minimizes the same way.
+  _requestClose() {
+    if (this._state === State.EXPANDED || this._state === State.EXPANDING) {
+      this._closePanel();
+      return;
+    }
+    if (this._peekActive) this._dismissPeek();
+  }
+
   _closePanel() {
     if (this._state === State.COMPACT || this._state === State.COLLAPSING)
       return;
@@ -1576,7 +1605,6 @@ export default class DynamicNotchExtension extends Extension {
       this._grabbed = this._grabHelper.grab({
         actor: this._notch,
         onUngrab: () => {
-          log("dynamic-notch: grab released by outside interaction");
           this._closePanel();
         },
       });
@@ -1584,7 +1612,6 @@ export default class DynamicNotchExtension extends Extension {
       logError(e, "dynamic-notch: GrabHelper unavailable");
       this._grabbed = false;
     }
-    log(`dynamic-notch: panel open, modal grab = ${this._grabbed}`);
 
     this._focusWindowId = global.display.connect("notify::focus-window", () => {
       if (this._state === State.EXPANDED || this._state === State.EXPANDING)
@@ -2001,6 +2028,48 @@ export default class DynamicNotchExtension extends Extension {
 
   // -------------------------------------------- providers / integration
 
+  // Copy feedback from clipboard OWNER changes (MetaSelection):
+  // no keyboard hooks, content never read, fully guarded.
+  _initClipboardWatch() {
+    this._selection = null;
+    this._selectionChangedId = 0;
+    this._lastCopyPeekUs = 0;
+    try {
+      const selection = global.display.get_selection();
+      if (!selection?.connect) return;
+      this._selection = selection;
+      this._selectionChangedId = selection.connect(
+        "owner-changed",
+        (_s, type, owner) => {
+          if (!owner) return;
+          try {
+            if (Meta.SelectionType && type !== Meta.SelectionType.CLIPBOARD)
+              return;
+          } catch (_e) {}
+          this._onClipboardOwnerChanged();
+        },
+      );
+    } catch (_e) {
+      this._selection = null;
+      this._selectionChangedId = 0;
+    }
+  }
+
+  _onClipboardOwnerChanged() {
+    const now = GLib.get_monotonic_time();
+    if (now - this._lastCopyPeekUs < 1200000) return; // one peek per copy action, not per signal burst
+    this._lastCopyPeekUs = now;
+    if (this._peekActive) return; // never clobber a notification / finish peek
+    this._showPeek(
+      {
+        iconName: "edit-copy-symbolic",
+        title: "Text Copied",
+        body: "You copied text to the clipboard",
+      },
+      2500,
+    );
+  }
+
   _initProviders() {
     // Failure-isolated: if the tray API differs, everything else keeps working.
     try {
@@ -2116,6 +2185,19 @@ export default class DynamicNotchExtension extends Extension {
         return GLib.SOURCE_REMOVE;
       },
     );
+    // Content fades in as the box grows (and resets any fade-out
+    // left over from a previous peek's close).
+    this._peekView.remove_all_transitions();
+    if (this._animationsEnabled() && this._state === State.COMPACT) {
+      this._peekView.opacity = 0;
+      this._peekView.ease({
+        opacity: 255,
+        duration: Math.round(ANIM_MS * 0.7),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._peekView.opacity = 255;
+    }
     if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the peek
     this._syncViews();
     this._applySize(true);
@@ -2131,8 +2213,35 @@ export default class DynamicNotchExtension extends Extension {
     this._peekNotification = null;
     this._updateCompactDisplay();
     if (this._state !== State.COMPACT) return;
-    this._animOnDone = () => this._syncViews();
+    // Content (icon/text/×) fades out first; the box then
+    // finishes shrinking empty instead of dragging content.
+    this._peekView.remove_all_transitions();
+    if (this._animationsEnabled()) {
+      this._peekView.ease({
+        opacity: 0,
+        duration: Math.round(ANIM_MS * 0.45),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._peekView.opacity = 0;
+    }
+    this._animOnDone = () => {
+      this._syncViews();
+      if (this._animationsEnabled()) this._fadeInCompact();
+    };
     this._applySize(true);
+  }
+
+  // Soften the compact view's pop-in at the end of a peek close.
+  _fadeInCompact() {
+    if (!this._clockWidget || !this._clockWidget.visible) return;
+    this._clockWidget.remove_all_transitions();
+    this._clockWidget.opacity = 0;
+    this._clockWidget.ease({
+      opacity: 255,
+      duration: 120,
+      mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+    });
   }
 
   // ------------------------------------------------------ notifications
@@ -2167,18 +2276,24 @@ export default class DynamicNotchExtension extends Extension {
     return f;
   }
 
-  // Peek close: dismiss ONLY the shown notification (destroy
-  // it if still in the tray); never clears the whole list.
+  // Peek close: notifications only minimize (see _hidePeek);
+  // the timer-complete close also ends the finished display.
   _dismissPeek() {
-    const n = this._peekNotification;
-    if (n && this._peekKind === "notification") {
-      try {
-        if (this._notifProvider?.getAll().includes(n)) n.destroy();
-      } catch (e) {
-        logError(e, "dynamic-notch: dismiss notification failed");
-      }
-    }
+    // Notification peeks only minimize, exactly like the
+    // timeout does; the notification itself stays in the list.
     this._peekNotification = null;
+    // Closing the "Time's up!" peek also ends the finished
+    // state now; otherwise the chip stays until the timeout.
+    if (
+      this._peekKind === "timer-complete" &&
+      this._timerState === "finished"
+    ) {
+      if (this._timerFinishTimeoutId) {
+        GLib.source_remove(this._timerFinishTimeoutId);
+        this._timerFinishTimeoutId = 0;
+      }
+      this._timerStop();
+    }
     this._hidePeek();
   }
 

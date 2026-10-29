@@ -1,4 +1,4 @@
-UUID = dynamic-notch@local
+UUID = dynamic-notch@faishalmhmd
 EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 SRC_DIR = src
 SCHEMAS_DIR = $(SRC_DIR)/schemas

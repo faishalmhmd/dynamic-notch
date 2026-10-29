@@ -144,6 +144,7 @@
 
 .dn-topbar {
   spacing: 12px;
+  padding: 4px 6px;
 }
 
 .dn-page-main {
@@ -256,6 +257,19 @@
 
 .dn-qa-button:hover {
   background-color: rgba(255, 255, 255, 0.09);
+}
+
+/* Close (×) buttons: red icon, generous click area */
+.dn-close-btn {
+  color: #e01b24;
+}
+
+.dn-close-btn:hover {
+  color: #ff453a;
+}
+
+.dn-fg-dark .dn-close-btn {
+  color: #c01c28;
 }
 
 .dn-fg-dark .dn-qa-button:hover {

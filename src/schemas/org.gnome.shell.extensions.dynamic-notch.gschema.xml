@@ -11,17 +11,17 @@
     <value nick="left" value="2"/>
     <value nick="right" value="3"/>
   </enum>
-  <!-- BARU (refinement v2): mode background panel. Mode kelima "dynamic"
-       TIDAK dimasukkan ke enum ini — perilaku dynamic tetap dipegang
-       key bawaan transparent-panel di bawah, supaya tidak ada dua
-       sumber kebenaran untuk perilaku yang sama. -->
+  <!-- Added in refinement v2: panel background mode. A fifth
+       "dynamic" mode is deliberately NOT part of this enum — the
+       dynamic behaviour stays with the stock transparent-panel
+       key below, so there is a single source of truth for it. -->
   <enum id="org.gnome.shell.extensions.dynamic-notch.PanelBgMode">
     <value nick="theme" value="0"/>
     <value nick="transparent" value="1"/>
     <value nick="solid" value="2"/>
     <value nick="semi-transparent" value="3"/>
   </enum>
-  <!-- BARU (refinement v2): warna teks/ikon, dipakai panel dan notch. -->
+  <!-- Added in refinement v2: text/icon color, used by the panel and the notch. -->
   <enum id="org.gnome.shell.extensions.dynamic-notch.FgMode">
     <value nick="auto" value="0"/>
     <value nick="light" value="1"/>
@@ -59,41 +59,41 @@
       <default>false</default>
       <summary>Make the top panel transparent when no window is near it</summary>
     </key>
-    <!-- BARU (refinement v2): background panel saat transparent-panel
-         mati, atau background yang dipakai saat ada jendela menyentuh
-         panel ketika transparent-panel menyala (solid/semi dipakai
-         apa adanya, theme/transparent kembali ke tampilan stock). -->
+    <!-- Added in refinement v2: the panel background used while
+         transparent-panel is off, or the background applied when a
+         window touches the panel while transparent-panel is on
+         (solid/semi are used as-is, theme/transparent fall back to
+         the stock appearance). -->
     <key name="panel-bg-mode" enum="org.gnome.shell.extensions.dynamic-notch.PanelBgMode">
       <default>'theme'</default>
       <summary>Panel background: theme, transparent, solid, or semi-transparent</summary>
     </key>
-    <!-- BARU (refinement v2) -->
+    <!-- Added in refinement v2 -->
     <key name="panel-color" type="s">
       <default>'rgba(24,24,32,0.72)'</default>
       <summary>Panel color for solid / semi-transparent modes (CSS rgb()/rgba() string; alpha is used by semi-transparent only)</summary>
     </key>
-    <!-- BARU (refinement v2) -->
+    <!-- Added in refinement v2 -->
     <key name="panel-text-mode" enum="org.gnome.shell.extensions.dynamic-notch.FgMode">
       <default>'auto'</default>
       <summary>Panel text/icon color: auto (from the known panel color), light, or dark</summary>
     </key>
-    <!-- BARU (refinement v2) -->
+    <!-- Added in refinement v2 -->
     <key name="notch-text-mode" enum="org.gnome.shell.extensions.dynamic-notch.FgMode">
       <default>'auto'</default>
       <summary>Notch text color: auto (from the notch background color), light, or dark</summary>
     </key>
-    <!-- BARU (v11): ikon top bar panel expanded, satu objek JSON
-         per ikon: {"mode":"builtin","id":"dnd","icon":"..."},
-         {"mode":"tab","tab":"timer","icon":"..."}, atau
+    <!-- Added in v11: expanded-panel top bar icons, one JSON
+         object per icon: {"mode":"builtin","id":"dnd","icon":"..."},
+         {"mode":"tab","tab":"timer","icon":"..."}, or
          {"mode":"script","path":"/abs/path","icon":"..."}. -->
     <key name="topbar-icons" type="as">
-      <default>['{"mode":"builtin","id":"dnd","icon":"notifications-disabled-symbolic"}', '{"mode":"builtin","id":"timer","icon":"alarm-symbolic"}', '{"mode":"builtin","id":"today","icon":"x-office-calendar-symbolic"}', '{"mode":"builtin","id":"clear","icon":"edit-clear-symbolic"}', '{"mode":"builtin","id":"settings","icon":"preferences-system-symbolic"}']</default>
+      <default>['{"mode":"builtin","id":"dnd","icon":"user-busy-symbolic"}', '{"mode":"builtin","id":"timer","icon":"alarm-symbolic"}', '{"mode":"builtin","id":"today","icon":"x-office-calendar-symbolic"}', '{"mode":"builtin","id":"clear","icon":"edit-clear-symbolic"}', '{"mode":"builtin","id":"settings","icon":"preferences-system-symbolic"}']</default>
       <summary>Top bar icons (JSON entries: builtin action, tab switch, or script), in order</summary>
     </key>
-    <!-- BARU (v4): default editor timer, dimuat saat enable dan
-         disimpan kembali saat Play ditekan dari keadaan idle.
-         Bukan state countdown: timer yang sedang berjalan tidak
-         selamat dari restart Shell. -->
+    <!-- Added in v4: timer editor defaults, loaded at enable and
+         saved back when Play is pressed from idle. Not countdown
+         state: a running timer does not survive a Shell restart. -->
     <key name="timer-title" type="s">
       <default>'Focus Timer'</default>
       <summary>Default timer title</summary>
