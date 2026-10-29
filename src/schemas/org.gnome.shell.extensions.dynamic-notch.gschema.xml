@@ -81,13 +81,13 @@
       <default>'auto'</default>
       <summary>Notch text color: auto (from the notch background color), light, or dark</summary>
     </key>
-    <!-- BARU (v6): quick action ikon yang tampil di top bar panel
-         expanded, sesuai urutan array. Id: dnd, timer, today,
-         clear, settings. Ini SATU-SATUNYA kustomisasi tampilan;
-         layout expanded sendiri tetap dan tidak bisa diatur. -->
-    <key name="quick-actions" type="as">
-      <default>['dnd', 'timer', 'today', 'clear', 'settings']</default>
-      <summary>Quick action icon ids shown in the expanded top bar, in order</summary>
+    <!-- BARU (v11): ikon top bar panel expanded, satu objek JSON
+         per ikon: {"mode":"builtin","id":"dnd","icon":"..."},
+         {"mode":"tab","tab":"timer","icon":"..."}, atau
+         {"mode":"script","path":"/abs/path","icon":"..."}. -->
+    <key name="topbar-icons" type="as">
+      <default>['{"mode":"builtin","id":"dnd","icon":"notifications-disabled-symbolic"}', '{"mode":"builtin","id":"timer","icon":"alarm-symbolic"}', '{"mode":"builtin","id":"today","icon":"x-office-calendar-symbolic"}', '{"mode":"builtin","id":"clear","icon":"edit-clear-symbolic"}', '{"mode":"builtin","id":"settings","icon":"preferences-system-symbolic"}']</default>
+      <summary>Top bar icons (JSON entries: builtin action, tab switch, or script), in order</summary>
     </key>
     <!-- BARU (v4): default editor timer, dimuat saat enable dan
          disimpan kembali saat Play ditekan dari keadaan idle.

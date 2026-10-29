@@ -116,72 +116,156 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
         page.add(appearance);
 
         const qaGroup = new Adw.PreferencesGroup({
-            title: 'Quick Actions',
-            description: 'Ikon di top bar panel expanded (panel hanya ' +
-                'menampilkan ikonnya). Matikan untuk menyembunyikan; ' +
-                'urutan array menentukan urutan ikon.',
+            title: 'Top Bar Icons',
+            description: 'Ikon di top bar panel expanded. Setiap ikon ' +
+                'bisa berupa aksi bawaan, pengalih tab, atau script ' +
+                '(dijalankan langsung sebagai file executable, tanpa ' +
+                'shell). Urutan baris menentukan urutan ikon.',
         });
         page.add(qaGroup);
-        const qaRows = [];
-        const qaKnown = QA_TITLES.map(([id]) => id);
-        const qaOrder = () => settings.get_strv('quick-actions')
-            .filter(id => qaKnown.includes(id));
-        const qaTitle = id => QA_TITLES.find(([x]) => x === id)?.[1] ?? id;
-        const rebuildQaRows = () => {
-            for (const row of qaRows)
+        const tbRows = [];
+        const tbRead = () => {
+            const out = [];
+            for (const s of settings.get_strv('topbar-icons')) {
+                try {
+                    const e = JSON.parse(s);
+                    if (e && typeof e === 'object' && e.mode)
+                        out.push(e);
+                } catch (_err) {}
+            }
+            return out;
+        };
+        const tbWrite = arr => settings.set_strv('topbar-icons',
+            arr.map(e => JSON.stringify(e)));
+        const tbTitle = e => {
+            if (e.mode === 'builtin')
+                return `Built-in — ${QA_TITLES.find(([x]) => x === e.id)?.[1] ?? e.id}`;
+            if (e.mode === 'tab')
+                return `Tab — ${e.tab === 'timer' ? 'Timer' : 'Main'}`;
+            return `Script — ${e.path ?? ''}`;
+        };
+        const rebuildTbRows = () => {
+            for (const row of tbRows)
                 qaGroup.remove(row);
-            qaRows.length = 0;
-            const present = qaOrder();
-            const all = [...present,
-                ...qaKnown.filter(id => !present.includes(id))];
-            for (const id of all) {
-                const idx = present.indexOf(id);
-                const row = new Adw.ActionRow({
-                    title: qaTitle(id),
-                    subtitle: idx >= 0 ? `Position ${idx + 1}` : 'Hidden',
+            tbRows.length = 0;
+            const entries = tbRead();
+            const mkBtn = (icon, sensitive, fn) => {
+                const b = new Gtk.Button({
+                    icon_name: icon,
+                    valign: Gtk.Align.CENTER,
+                    sensitive,
                 });
-                const mkBtn = (icon, sensitive, fn) => {
-                    const b = new Gtk.Button({
-                        icon_name: icon,
+                b.add_css_class('flat');
+                b.connect('clicked', fn);
+                return b;
+            };
+            entries.forEach((entry, idx) => {
+                const row = new Adw.ActionRow({
+                    title: tbTitle(entry),
+                    subtitle: `Position ${idx + 1} — icon: ${entry.icon ?? 'default'}`,
+                });
+                const iconEntry = new Gtk.Entry({
+                    text: entry.icon ?? '',
+                    placeholder_text: 'icon-name-symbolic',
+                    width_chars: 20,
+                    valign: Gtk.Align.CENTER,
+                });
+                iconEntry.connect('changed', () => {
+                    const arr = tbRead();
+                    if (arr[idx]) {
+                        arr[idx].icon = iconEntry.text.trim();
+                        tbWrite(arr);
+                    }
+                });
+                row.add_suffix(iconEntry);
+                if (entry.mode === 'script') {
+                    const pathEntry = new Gtk.Entry({
+                        text: entry.path ?? '',
+                        placeholder_text: '/home/user/script.sh',
+                        width_chars: 24,
                         valign: Gtk.Align.CENTER,
-                        sensitive,
                     });
-                    b.add_css_class('flat');
-                    b.connect('clicked', fn);
-                    return b;
-                };
+                    pathEntry.connect('changed', () => {
+                        const arr = tbRead();
+                        if (arr[idx]) {
+                            arr[idx].path = pathEntry.text.trim();
+                            tbWrite(arr);
+                        }
+                    });
+                    row.add_suffix(pathEntry);
+                } else {
+                    const options = entry.mode === 'builtin'
+                        ? QA_TITLES : [['main', 'Main'], ['timer', 'Timer']];
+                    const drop = new Gtk.DropDown({
+                        model: Gtk.StringList.new(options.map(([, t]) => t)),
+                        valign: Gtk.Align.CENTER,
+                    });
+                    const curVal = entry.mode === 'builtin' ? entry.id : entry.tab;
+                    drop.selected = Math.max(0,
+                        options.findIndex(([v]) => v === curVal));
+                    drop.connect('notify::selected', () => {
+                        const arr = tbRead();
+                        if (!arr[idx])
+                            return;
+                        const val = options[drop.selected]?.[0];
+                        if (entry.mode === 'builtin')
+                            arr[idx].id = val;
+                        else
+                            arr[idx].tab = val;
+                        tbWrite(arr);
+                        rebuildTbRows();
+                    });
+                    row.add_suffix(drop);
+                }
                 row.add_suffix(mkBtn('go-up-symbolic', idx > 0, () => {
-                    const arr = qaOrder();
+                    const arr = tbRead();
                     [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-                    settings.set_strv('quick-actions', arr);
-                    rebuildQaRows();
+                    tbWrite(arr);
+                    rebuildTbRows();
                 }));
                 row.add_suffix(mkBtn('go-down-symbolic',
-                    idx >= 0 && idx < present.length - 1, () => {
-                        const arr = qaOrder();
+                    idx < entries.length - 1, () => {
+                        const arr = tbRead();
                         [arr[idx + 1], arr[idx]] = [arr[idx], arr[idx + 1]];
-                        settings.set_strv('quick-actions', arr);
-                        rebuildQaRows();
+                        tbWrite(arr);
+                        rebuildTbRows();
                     }));
-                const sw = new Gtk.Switch({
-                    valign: Gtk.Align.CENTER,
-                    active: idx >= 0,
-                });
-                sw.connect('notify::active', () => {
-                    const arr = qaOrder();
-                    if (sw.active && !arr.includes(id))
-                        settings.set_strv('quick-actions', [...arr, id]);
-                    else if (!sw.active && arr.includes(id))
-                        settings.set_strv('quick-actions',
-                            arr.filter(x => x !== id));
-                    rebuildQaRows();
-                });
-                row.add_suffix(sw);
+                row.add_suffix(mkBtn('user-trash-symbolic', true, () => {
+                    const arr = tbRead();
+                    arr.splice(idx, 1);
+                    tbWrite(arr);
+                    rebuildTbRows();
+                }));
                 qaGroup.add(row);
-                qaRows.push(row);
-            }
+                tbRows.push(row);
+            });
+            const addRow = new Adw.ActionRow({title: 'Add Icon'});
+            const mkAdd = (label, entry) => {
+                const b = new Gtk.Button({
+                    label,
+                    valign: Gtk.Align.CENTER,
+                });
+                b.add_css_class('flat');
+                b.connect('clicked', () => {
+                    tbWrite([...tbRead(), entry]);
+                    rebuildTbRows();
+                });
+                return b;
+            };
+            addRow.add_suffix(mkAdd('Built-in',
+                {mode: 'builtin', id: 'today', icon: 'x-office-calendar-symbolic'}));
+            addRow.add_suffix(mkAdd('Tab',
+                {mode: 'tab', tab: 'timer', icon: 'alarm-symbolic'}));
+            addRow.add_suffix(mkAdd('Script',
+                {mode: 'script', path: '', icon: 'utilities-terminal-symbolic'}));
+            addRow.add_suffix(mkBtn('edit-undo-symbolic', true, () => {
+                settings.reset('topbar-icons');
+                rebuildTbRows();
+            }));
+            qaGroup.add(addRow);
+            tbRows.push(addRow);
         };
-        rebuildQaRows();
+        rebuildTbRows();
 
         // ---------------- Timer & Clock page ----------------
         const timerPage = new Adw.PreferencesPage();

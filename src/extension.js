@@ -83,6 +83,13 @@ const QA_DEFS = [
     ['settings', 'preferences-system-symbolic', 'Extension Settings'],
 ];
 
+const TAB_DEFS = [
+    ['main', 'Main', 'x-office-calendar-symbolic'],
+    ['timer', 'Timer', 'alarm-symbolic'],
+];
+
+const ICON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_.]*$/;
+
 export default class DynamicNotchExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
@@ -104,6 +111,8 @@ export default class DynamicNotchExtension extends Extension {
 
         this._page = 'main';
         this._qaButtons = new Map();
+        this._tabEntryBtns = [];
+        this._scriptProcs = new Set();
 
         // Running apps (AppSystem signals, failure-isolated)
         this._appSystem = null;
@@ -168,7 +177,7 @@ export default class DynamicNotchExtension extends Extension {
             this._applyNotchStyle();
             this._refreshGeometry();
             this._updatePanelAppearance();
-            if (key === 'quick-actions')
+            if (key === 'topbar-icons')
                 this._buildQaButtons();
         });
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
@@ -257,6 +266,12 @@ export default class DynamicNotchExtension extends Extension {
             } catch (_e) {}
             this._calProvider = null;
         }
+        for (const proc of this._scriptProcs ?? []) {
+            try {
+                proc.force_exit();
+            } catch (_e) {}
+        }
+        this._scriptProcs?.clear();
         if (this._appSystem && this._appStateId) {
             try {
                 this._appSystem.disconnect(this._appStateId);
@@ -475,7 +490,7 @@ export default class DynamicNotchExtension extends Extension {
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._tabButtons = new Map();
-        for (const [id, label] of [['main', 'Main'], ['timer', 'Timer']]) {
+        for (const [id, label] of TAB_DEFS) {
             const b = new St.Button({
                 label,
                 style_class: 'dn-tab',
@@ -529,30 +544,113 @@ export default class DynamicNotchExtension extends Extension {
         return root;
     }
 
+    // Top-bar icon entries come from the 'topbar-icons' key: one
+    // JSON object per icon — builtin action, tab switch, or script.
+    _parseTopbarEntries() {
+        const entries = [];
+        let raw = [];
+        try {
+            raw = this._settings.get_strv('topbar-icons');
+        } catch (_e) {}
+        const qaIds = new Set(QA_DEFS.map(d => d[0]));
+        const tabIds = new Set(TAB_DEFS.map(d => d[0]));
+        for (const s of raw) {
+            let e = null;
+            try {
+                e = JSON.parse(s);
+            } catch (_err) {}
+            if (!e || typeof e !== 'object')
+                continue;
+            const icon = typeof e.icon === 'string' &&
+                ICON_NAME_RE.test(e.icon) ? e.icon : null;
+            if (e.mode === 'builtin' && qaIds.has(e.id)) {
+                const def = QA_DEFS.find(d => d[0] === e.id);
+                entries.push({mode: 'builtin', id: e.id,
+                    icon: icon ?? def[1], label: def[2]});
+            } else if (e.mode === 'tab' && tabIds.has(e.tab)) {
+                const def = TAB_DEFS.find(d => d[0] === e.tab);
+                entries.push({mode: 'tab', tab: e.tab,
+                    icon: icon ?? def[2], label: `${def[1]} tab`});
+            } else if (e.mode === 'script' &&
+                typeof e.path === 'string' && e.path.startsWith('/')) {
+                entries.push({mode: 'script', path: e.path,
+                    icon: icon ?? 'utilities-terminal-symbolic',
+                    label: e.path.split('/').pop() || e.path});
+            }
+        }
+        return entries;
+    }
+
     _buildQaButtons() {
         if (!this._qaBar)
             return;
         this._qaBar.destroy_all_children();
         this._qaButtons.clear();
-        const known = new Map(QA_DEFS.map(d => [d[0], d]));
-        let ids = [];
-        try {
-            ids = this._settings.get_strv('quick-actions')
-                .filter(id => known.has(id));
-        } catch (_e) {}
-        for (const id of ids) {
-            const [, iconName, title] = known.get(id);
+        this._tabEntryBtns = [];
+        for (const entry of this._parseTopbarEntries()) {
             const button = new St.Button({
                 style_class: 'dn-qa-button',
-                accessible_name: title,
+                accessible_name: entry.label,
             });
-            button.child = new St.Icon({icon_name: iconName, icon_size: 18});
-            button.connect('clicked', () => this._qaActivate(id));
-            this._addTooltip(button, title);
+            button.child = new St.Icon({
+                icon_name: entry.icon,
+                icon_size: 18,
+            });
+            if (entry.mode === 'builtin') {
+                button.connect('clicked', () => this._qaActivate(entry.id));
+                this._qaButtons.set(entry.id, button);
+            } else if (entry.mode === 'tab') {
+                button.connect('clicked', () => this._setTab(entry.tab));
+                this._tabEntryBtns.push({tab: entry.tab, button});
+            } else {
+                button.connect('clicked', () => this._runScript(entry.path));
+            }
+            this._addTooltip(button, entry.label);
             this._qaBar.add_child(button);
-            this._qaButtons.set(id, button);
         }
         this._syncQaStates();
+    }
+
+    _runScript(path) {
+        const fail = why => {
+            logError(new Error(why), 'dynamic-notch: script action failed');
+            this._showPeek({
+                iconName: 'dialog-warning-symbolic',
+                title: 'Script failed',
+                body: `${path} — ${why}`,
+            }, 4000);
+        };
+        let proc;
+        try {
+            const file = Gio.File.new_for_path(path);
+            const info = file.query_info(
+                'standard::type,access::can-execute',
+                Gio.FileQueryInfoFlags.NONE, null);
+            if (info.get_file_type() !== Gio.FileType.REGULAR) {
+                fail('not a regular file');
+                return;
+            }
+            if (!info.get_attribute_boolean('access::can-execute')) {
+                fail('file is not executable');
+                return;
+            }
+            // Argv array only: the path is never joined into a shell string.
+            proc = Gio.Subprocess.new([path], Gio.SubprocessFlags.NONE);
+        } catch (e) {
+            fail(e.message ?? 'cannot start');
+            return;
+        }
+        this._scriptProcs.add(proc);
+        proc.wait_async(null, (p, res) => {
+            this._scriptProcs.delete(p);
+            try {
+                p.wait_finish(res);
+                if (!p.get_successful())
+                    fail('exited with an error');
+            } catch (e) {
+                fail(e.message ?? 'wait failed');
+            }
+        });
     }
 
     _qaActivate(id) {
@@ -579,11 +677,16 @@ export default class DynamicNotchExtension extends Extension {
 
     _setTab(name) {
         this._showPage(name);
-        for (const [id, b] of this._tabButtons ?? [])
-            b.toggle_style_class_name('dn-tab-active', id === name);
+        for (const [id, b] of this._tabButtons ?? []) {
+            if (id === name)
+                b.add_style_class_name('dn-tab-active');
+            else
+                b.remove_style_class_name('dn-tab-active');
+        }
         // Switching tabs resizes the open panel to the tab's own size.
         if (this._state === State.EXPANDED || this._state === State.EXPANDING)
             this._applySize(true);
+        this._syncQaStates();
     }
 
     _showPage(name) {
@@ -609,7 +712,8 @@ export default class DynamicNotchExtension extends Extension {
             }
             dndBtn.reactive = usable;
             dndBtn.opacity = usable ? 255 : 110;
-            dndBtn.style_class = 'dn-qa-button' + (active ? ' dn-qa-active' : '');
+            dndBtn.style_class = 'dn-qa-button' +
+                (active ? ' dn-qa-active dn-qa-dnd-on' : '');
         }
         const timerBtn = this._qaButtons.get('timer');
         if (timerBtn) {
@@ -622,6 +726,10 @@ export default class DynamicNotchExtension extends Extension {
             const has = this._notifProvider?.getAll().length > 0;
             clearBtn.reactive = has;
             clearBtn.opacity = has ? 255 : 110;
+        }
+        for (const {tab, button} of this._tabEntryBtns ?? []) {
+            button.style_class = 'dn-qa-button' +
+                (this._page === tab ? ' dn-qa-active' : '');
         }
     }
 
@@ -1177,6 +1285,13 @@ export default class DynamicNotchExtension extends Extension {
         this._clockTime.text = stamp;
         this._expandedClock.text = stamp;
         this._expandedDate.text = now.format('%A');
+        // The collapsed pill sizes to this text; re-measure (eased)
+        // only when the stamp actually changes, i.e. once a minute.
+        if (stamp !== this._lastStamp) {
+            this._lastStamp = stamp;
+            if (this._state === State.COMPACT && !this._peekActive)
+                this._applySize(true);
+        }
 
         // Day rollover while the Shell keeps running: keep the
         // calendar's "today" honest without a separate timer.
@@ -1500,6 +1615,21 @@ export default class DynamicNotchExtension extends Extension {
         const expanded = this._targetExpanded();
         const peek = !expanded && this._peekActive && this._state === State.COMPACT;
 
+        // Collapsed pill (not the apple style): length follows the
+        // clock content's natural size, measured in its orientation.
+        let dynLen = 0;
+        if (!expanded && !peek && style !== 0 && this._clockWidget) {
+            const vertical = position === 2 || position === 3;
+            this._clockWidget.orientation = vertical
+                ? Clutter.Orientation.VERTICAL : Clutter.Orientation.HORIZONTAL;
+            const [, nat] = vertical
+                ? this._clockWidget.get_preferred_height(-1)
+                : this._clockWidget.get_preferred_width(-1);
+            if (nat > 0)
+                dynLen = Math.min(Math.max(nat + 16, 120),
+                    monitor.width - 16);
+        }
+
         let x, y, notchW, notchH;
 
         if (expanded) {
@@ -1517,37 +1647,38 @@ export default class DynamicNotchExtension extends Extension {
             notchH = h;
             this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
         } else {
+            const effW = dynLen > 0 ? dynLen : w;
             switch (position) {
             case 0:
-                x = Math.round(monitor.x + (monitor.width - w) / 2);
+                x = Math.round(monitor.x + (monitor.width - effW) / 2);
                 y = monitor.y + 6;
-                notchW = w; notchH = h;
+                notchW = effW; notchH = h;
                 this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
                 break;
             case 1:
-                x = Math.round(monitor.x + (monitor.width - w) / 2);
+                x = Math.round(monitor.x + (monitor.width - effW) / 2);
                 y = monitor.y + monitor.height - h - 6;
-                notchW = w; notchH = h;
+                notchW = effW; notchH = h;
                 this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
                 break;
             case 2:
                 x = monitor.x + 6;
-                y = Math.round(monitor.y + (monitor.height - w) / 2);
-                notchW = h; notchH = w;
+                y = Math.round(monitor.y + (monitor.height - effW) / 2);
+                notchW = h; notchH = effW;
                 this._clockWidget.orientation = Clutter.Orientation.VERTICAL;
                 break;
             default:
                 x = monitor.x + monitor.width - h - 6;
-                y = Math.round(monitor.y + (monitor.height - w) / 2);
-                notchW = h; notchH = w;
+                y = Math.round(monitor.y + (monitor.height - effW) / 2);
+                notchW = h; notchH = effW;
                 this._clockWidget.orientation = Clutter.Orientation.VERTICAL;
                 break;
             }
         }
 
-        // Live chips widen the compact pill to the content's natural
-        // width, measured before the animation starts.
-        if (!expanded && !peek &&
+        // Apple style (and any pill measurement failure) keeps the
+        // configured width; live chips may still widen it to fit.
+        if (!expanded && !peek && dynLen === 0 &&
             (this._timerChip?.visible || this._notifChip?.visible)) {
             const [, nat] = this._clockWidget.get_preferred_width(-1);
             if (nat > 0)
@@ -1743,7 +1874,12 @@ export default class DynamicNotchExtension extends Extension {
     // ------------------------------------------------------ notifications
 
     _notifFields(n) {
-        const f = {app: '', title: '', body: '', time: '', gicon: null};
+        const f = {app: '', title: '', body: '', time: '', gicon: null,
+            urgency: null};
+        try {
+            if (typeof n.urgency === 'number')
+                f.urgency = n.urgency;
+        } catch (_e) {}
         try {
             f.app = n.source?.title ?? '';
         } catch (_e) {}
@@ -1801,7 +1937,15 @@ export default class DynamicNotchExtension extends Extension {
                 all = [];
             }
         }
-        this._notifCount.text = this._notifAvailable ? ` ${all.length}` : ' n/a';
+        if (this._notifAvailable) {
+            this._notifCount.text = `${all.length}`;
+            this._notifCount.visible = all.length > 0;
+            this._notifCount.style_class = 'dn-notif-badge';
+        } else {
+            this._notifCount.text = 'n/a';
+            this._notifCount.visible = true;
+            this._notifCount.style_class = 'dn-notif-count';
+        }
         this._clearButton.reactive = all.length > 0;
         this._clearButton.opacity = all.length > 0 ? 255 : 120;
         this._notifEmpty.visible = all.length === 0;
@@ -1824,7 +1968,11 @@ export default class DynamicNotchExtension extends Extension {
             style_class: 'dn-notif-item',
             x_expand: true,
         });
-        const row = new St.BoxLayout({style_class: 'dn-notif-row'});
+        button.x_align = Clutter.ActorAlign.START;
+        const row = new St.BoxLayout({
+            style_class: 'dn-notif-row',
+            x_expand: true,
+        });
         const icon = f.gicon
             ? new St.Icon({gicon: f.gicon, icon_size: 20})
             : new St.Icon({icon_name: 'dialog-information-symbolic', icon_size: 20});
@@ -1862,6 +2010,16 @@ export default class DynamicNotchExtension extends Extension {
             texts.add_child(body);
         }
         row.add_child(texts);
+        // Urgency dot: only for states the source actually reports
+        // (MessageTray urgency HIGH=2 / CRITICAL=3) — nothing invented.
+        if (f.urgency !== null && f.urgency >= 2) {
+            const dot = new St.Widget({
+                style: 'width: 7px; height: 7px; border-radius: 999px;' +
+                    `background-color: ${f.urgency >= 3 ? '#e01b24' : '#ff7800'};`,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            row.add_child(dot);
+        }
         button.child = row;
         button.connect('clicked', () => {
             // Activate the real notification (opens its app / action)
@@ -2184,6 +2342,8 @@ export default class DynamicNotchExtension extends Extension {
     _renderTimer() {
         if (!this._timerLabel)
             return;
+        this._timerLabel.style_class = 'dn-timer-count' +
+            (this._timerState === 'running' ? ' dn-timer-running' : '');
         const state = this._timerState;
         const remain = this._timerRemaining();
         const countText = state === 'finished' ? "Time's up!"
