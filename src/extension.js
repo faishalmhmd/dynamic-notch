@@ -1,6 +1,8 @@
 // Dynamic Notch — clock notch / Dynamic Island, GNOME Shell 51.
 
 import Clutter from "gi://Clutter";
+import Cogl from "gi://Cogl";
+import GdkPixbuf from "gi://GdkPixbuf";
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import Meta from "gi://Meta";
@@ -14,9 +16,10 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 
 import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
+import { MusicProvider } from "./lib/musicProvider.js";
 
-const EXPANDED_W = 1024;
-const EXPANDED_H = 600;
+const EXPANDED_W = 900;
+const EXPANDED_H = 540;
 const PEEK_W = 480;
 const PEEK_H = 78;
 const ANIM_MS = 260;
@@ -120,6 +123,8 @@ export default class DynamicNotchExtension extends Extension {
     this._notifAvailable = false;
     this._calProvider = null;
     this._calAvailable = false;
+    this._musicProvider = null;
+    this._musicArtUrl = null;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -294,6 +299,12 @@ export default class DynamicNotchExtension extends Extension {
         this._calProvider.destroy();
       } catch (_e) {}
       this._calProvider = null;
+    }
+    if (this._musicProvider) {
+      try {
+        this._musicProvider.destroy();
+      } catch (_e) {}
+      this._musicProvider = null;
     }
     if (this._appSystem && this._appStateId) {
       try {
@@ -526,9 +537,16 @@ export default class DynamicNotchExtension extends Extension {
       style_class: "dn-page-main",
       y_expand: true,
     });
+    const leftCol = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-left-col",
+    });
+    leftCol.set_width(300);
+    leftCol.add_child(this._buildMusicSection());
     const calArea = this._buildCalendarArea();
-    calArea.set_width(356);
-    this._pageMain.add_child(calArea);
+    calArea.y_expand = true;
+    leftCol.add_child(calArea);
+    this._pageMain.add_child(leftCol);
     const notifArea = this._buildNotifArea();
     notifArea.x_expand = true;
     this._pageMain.add_child(notifArea);
@@ -547,6 +565,148 @@ export default class DynamicNotchExtension extends Extension {
 
     root.add_child(this._buildAppsStrip());
     return root;
+  }
+
+  // -------------------------------------------------------------- music
+
+  _buildMusicSection() {
+    const box = new St.BoxLayout({
+      style_class: "dn-music",
+      visible: false,
+    });
+    this._musicSection = box;
+
+    this._musicArtBox = new St.Widget({
+      style_class: "dn-music-art",
+      layout_manager: new Clutter.BinLayout(),
+      width: 44,
+      height: 44,
+    });
+    const placeholder = new St.Icon({
+      icon_name: "audio-x-generic-symbolic",
+      icon_size: 22,
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._musicArtBox.add_child(placeholder);
+    this._musicArt = new St.Widget({
+      visible: false,
+      x_expand: true,
+      y_expand: true,
+      content_gravity: Clutter.ContentGravity.RESIZE_FILL,
+    });
+    this._musicArtBox.add_child(this._musicArt);
+    box.add_child(this._musicArtBox);
+
+    const texts = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-music-texts",
+      x_expand: true,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._musicTitle = new St.Label({ style_class: "dn-music-title" });
+    this._musicTitle.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    texts.add_child(this._musicTitle);
+    this._musicArtist = new St.Label({ style_class: "dn-music-artist" });
+    this._musicArtist.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    texts.add_child(this._musicArtist);
+    box.add_child(texts);
+
+    const controls = new St.BoxLayout({
+      style_class: "dn-music-controls",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    const mkBtn = (iconName, label, fn) => {
+      const b = new St.Button({
+        style_class: "dn-music-btn",
+        accessible_name: label,
+      });
+      const icon = new St.Icon({ icon_name: iconName, icon_size: 16 });
+      b.child = icon;
+      b.connect("clicked", fn);
+      this._addTooltip(b, label);
+      controls.add_child(b);
+      return { button: b, icon };
+    };
+    const prev = mkBtn("media-skip-backward-symbolic", "Previous", () =>
+      this._musicProvider?.previous(),
+    );
+    this._musicPrevBtn = prev.button;
+    const play = mkBtn("media-playback-start-symbolic", "Play/Pause", () =>
+      this._musicProvider?.playPause(),
+    );
+    this._musicPlayBtn = play.button;
+    this._musicPlayIcon = play.icon;
+    const next = mkBtn("media-skip-forward-symbolic", "Next", () =>
+      this._musicProvider?.next(),
+    );
+    this._musicNextBtn = next.button;
+    box.add_child(controls);
+    return box;
+  }
+
+  _renderMusic(state) {
+    if (!this._musicSection) return;
+    const available = !!state?.available;
+    this._musicSection.visible = available;
+    if (!available) return;
+    this._musicTitle.text = state.title;
+    this._musicArtist.text = state.artist || " ";
+    this._musicPlayIcon.icon_name =
+      state.status === "Playing"
+        ? "media-playback-pause-symbolic"
+        : "media-playback-start-symbolic";
+    const setBtn = (b, on) => {
+      b.reactive = on;
+      b.opacity = on ? 255 : 110;
+    };
+    setBtn(this._musicPlayBtn, state.canPlayPause);
+    setBtn(this._musicPrevBtn, state.canPrevious);
+    setBtn(this._musicNextBtn, state.canNext);
+    if (state.artUrl !== this._musicArtUrl) {
+      this._musicArtUrl = state.artUrl;
+      this._loadMusicArt(state.artUrl);
+    }
+  }
+
+  _loadMusicArt(url) {
+    if (!url) {
+      this._musicArt.hide();
+      return;
+    }
+    let file;
+    try {
+      file = Gio.File.new_for_uri(url);
+    } catch (_e) {
+      this._musicArt.hide();
+      return;
+    }
+    file.load_contents_async(null, (f, res) => {
+      if (url !== this._musicArtUrl || !this._musicArt) return;
+      try {
+        const [, bytes] = f.load_contents_finish(res);
+        const stream = Gio.MemoryInputStream.new_from_bytes(bytes);
+        const pb = GdkPixbuf.Pixbuf.new_from_stream(stream, null);
+        const content = new St.ImageContent({
+          preferred_width: pb.get_width(),
+          preferred_height: pb.get_height(),
+        });
+        content.set_bytes(
+          pb.read_pixel_bytes(),
+          pb.get_has_alpha()
+            ? Cogl.PixelFormat.RGBA_8888
+            : Cogl.PixelFormat.RGB_888,
+          pb.get_width(),
+          pb.get_height(),
+          pb.get_rowstride(),
+        );
+        this._musicArt.set_content(content);
+        this._musicArt.show();
+      } catch (e) {
+        logError(e, "dynamic-notch: loading album art failed");
+        this._musicArt.hide();
+      }
+    });
   }
 
   _buildQaButtons() {
@@ -796,12 +956,12 @@ export default class DynamicNotchExtension extends Extension {
     let iconActor = null;
     try {
       // The app's own icon, resolved by the Shell (never a bundled file).
-      iconActor = app.create_icon_texture(28);
+      iconActor = app.create_icon_texture(26);
     } catch (_e) {}
     if (!iconActor) {
       iconActor = new St.Icon({
         icon_name: "application-x-executable-symbolic",
-        icon_size: 28,
+        icon_size: 26,
       });
     }
     btn.child = iconActor;
@@ -1655,6 +1815,18 @@ export default class DynamicNotchExtension extends Extension {
       logError(e, "dynamic-notch: calendar events unavailable");
       this._calProvider = null;
       this._calAvailable = false;
+    }
+
+    // Music: an MPRIS client only (like dynamic-music-pill, it
+    // owns no bus name), so both can run side by side safely.
+    try {
+      this._musicProvider = new MusicProvider({
+        onChanged: (state) => this._renderMusic(state),
+      });
+      this._musicProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: music integration unavailable");
+      this._musicProvider = null;
     }
 
     // Do Not Disturb quick action (desktop notifications schema).
