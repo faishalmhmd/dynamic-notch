@@ -3,6 +3,7 @@
   <enum id="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
     <value nick="apple" value="0"/>
     <value nick="pill" value="1"/>
+    <value nick="apple-plain" value="2"/>
   </enum>
   <enum id="org.gnome.shell.extensions.dynamic-notch.Position">
     <value nick="top" value="0"/>
@@ -29,7 +30,7 @@
   <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
     <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
       <default>'apple'</default>
-      <summary>Notch style: apple (mac mode) or pill</summary>
+      <summary>Notch style: apple (mac mode, with outside rounded corners), pill, or apple-plain (mac mode without outside rounded corners)</summary>
     </key>
     <key name="pill-position" enum="org.gnome.shell.extensions.dynamic-notch.Position">
       <default>'top'</default>
