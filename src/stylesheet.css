@@ -144,8 +144,8 @@
 }
 
 .dn-expanded-root {
-    padding: 8px;
-    spacing: 6px;
+    padding: 12px;
+    spacing: 8px;
 }
 
 .dn-topbar {
@@ -154,6 +154,48 @@
 
 .dn-page-main {
     spacing: 6px;
+}
+
+.dn-page-row {
+    spacing: 6px;
+}
+
+.dn-tab-bar {
+    spacing: 2px;
+    padding-left: 10px;
+}
+
+.dn-tab {
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 9.5pt;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.55);
+    transition-duration: 150ms;
+}
+
+.dn-tab:hover {
+    color: rgba(255, 255, 255, 0.95);
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.dn-tab.dn-tab-active {
+    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.13);
+}
+
+.dn-fg-dark .dn-tab {
+    color: rgba(0, 0, 0, 0.5);
+}
+
+.dn-fg-dark .dn-tab:hover {
+    color: rgba(0, 0, 0, 0.9);
+    background-color: rgba(0, 0, 0, 0.07);
+}
+
+.dn-fg-dark .dn-tab.dn-tab-active {
+    color: #000000;
+    background-color: rgba(0, 0, 0, 0.12);
 }
 
 .dn-tooltip {
@@ -354,12 +396,16 @@
 }
 
 .dn-notif-list {
-    spacing: 6px;
+    spacing: 3px;
+}
+
+.dn-notif-texts {
+    spacing: 1px;
 }
 
 .dn-notif-item {
     border-radius: 8px;
-    padding: 6px 8px;
+    padding: 5px 6px;
     text-align: left;
 }
 
@@ -372,7 +418,7 @@
 }
 
 .dn-notif-row {
-    spacing: 8px;
+    spacing: 6px;
 }
 
 .dn-notif-item-title {

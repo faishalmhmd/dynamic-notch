@@ -15,8 +15,8 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {NotificationsProvider} from './lib/notification.js';
 import {CalendarProvider} from './lib/calendarProvider.js';
 
-const EXPANDED_W = 820;
-const EXPANDED_H = 470;
+const EXPANDED_W = 700;
+const EXPANDED_H = 440;
 const PEEK_W = 480;
 const PEEK_H = 78;
 const ANIM_MS = 260;
@@ -469,6 +469,23 @@ export default class DynamicNotchExtension extends Extension {
             return Clutter.EVENT_STOP;
         });
         topBar.add_child(corner);
+        this._topBar = topBar;
+        this._tabBar = new St.BoxLayout({
+            style_class: 'dn-tab-bar',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._tabButtons = new Map();
+        for (const [id, label] of [['main', 'Main'], ['timer', 'Timer']]) {
+            const b = new St.Button({
+                label,
+                style_class: 'dn-tab',
+                accessible_name: `${label} tab`,
+            });
+            b.connect('clicked', () => this._setTab(id));
+            this._tabButtons.set(id, b);
+            this._tabBar.add_child(b);
+        }
+        topBar.add_child(this._tabBar);
         this._qaBar = new St.BoxLayout({
             style_class: 'dn-qa-row',
             x_expand: true,
@@ -481,14 +498,21 @@ export default class DynamicNotchExtension extends Extension {
 
         this._pageMain = new St.BoxLayout({
             style_class: 'dn-page-main',
+            orientation: Clutter.Orientation.VERTICAL,
+            y_expand: true,
+        });
+        const mainRow = new St.BoxLayout({
+            style_class: 'dn-page-row',
             y_expand: true,
         });
         const calArea = this._buildCalendarArea();
         calArea.set_width(252);
-        this._pageMain.add_child(calArea);
+        mainRow.add_child(calArea);
         const notifArea = this._buildNotifArea();
         notifArea.x_expand = true;
-        this._pageMain.add_child(notifArea);
+        mainRow.add_child(notifArea);
+        this._pageMain.add_child(mainRow);
+        this._pageMain.add_child(this._buildAppsStrip());
         root.add_child(this._pageMain);
 
         this._pageTimer = new St.BoxLayout({
@@ -501,8 +525,7 @@ export default class DynamicNotchExtension extends Extension {
         timerStrip.y_align = Clutter.ActorAlign.CENTER;
         this._pageTimer.add_child(timerStrip);
         root.add_child(this._pageTimer);
-
-        root.add_child(this._buildAppsStrip());
+        this._setTab('main');
         return root;
     }
 
@@ -537,9 +560,9 @@ export default class DynamicNotchExtension extends Extension {
         if (id === 'dnd')
             this._toggleDnd();
         else if (id === 'timer')
-            this._showPage(this._page === 'timer' ? 'main' : 'timer');
+            this._setTab(this._page === 'timer' ? 'main' : 'timer');
         else if (id === 'today') {
-            this._showPage('main');
+            this._setTab('main');
             this._qaCalendarToday();
         } else if (id === 'clear') {
             if (this._notifProvider)
@@ -552,6 +575,15 @@ export default class DynamicNotchExtension extends Extension {
                 logError(e, 'dynamic-notch: opening preferences failed');
             }
         }
+    }
+
+    _setTab(name) {
+        this._showPage(name);
+        for (const [id, b] of this._tabButtons ?? [])
+            b.toggle_style_class_name('dn-tab-active', id === name);
+        // Switching tabs resizes the open panel to the tab's own size.
+        if (this._state === State.EXPANDED || this._state === State.EXPANDING)
+            this._applySize(true);
     }
 
     _showPage(name) {
@@ -1184,7 +1216,7 @@ export default class DynamicNotchExtension extends Extension {
             this._peekTimeoutId = 0;
         }
         this._syncViews();
-        this._showPage('main');
+        this._setTab('main');
         this._renderCalendar();
         this._refreshNotifList();
         this._refreshApps();
@@ -1393,9 +1425,36 @@ export default class DynamicNotchExtension extends Extension {
     }
 
     _expandedDims(monitor) {
+        if (this._page === 'timer')
+            return this._timerTabDims(monitor);
         return [
             Math.min(EXPANDED_W, Math.max(320, monitor.width - 16)),
             Math.min(EXPANDED_H, Math.max(240, monitor.height - 16)),
+        ];
+    }
+
+    // The timer tab sizes itself: natural size of the timer content
+    // plus the top bar and the expanded root's padding (12px/side).
+    _timerTabDims(monitor) {
+        let w = 480, contentH = 96;
+        if (this._pageTimer) {
+            const [, natW] = this._pageTimer.get_preferred_width(-1);
+            const [, natH] = this._pageTimer.get_preferred_height(-1);
+            if (natW > 100)
+                w = natW + 24;
+            if (natH > 20)
+                contentH = natH;
+        }
+        let topH = 40;
+        if (this._topBar) {
+            const [, natTop] = this._topBar.get_preferred_height(-1);
+            if (natTop > 10)
+                topH = natTop;
+        }
+        const h = contentH + topH + 24 + 8;
+        return [
+            Math.min(w, Math.max(340, monitor.width - 16)),
+            Math.min(h, Math.max(150, monitor.height - 16)),
         ];
     }
 
@@ -1769,10 +1828,11 @@ export default class DynamicNotchExtension extends Extension {
         const icon = f.gicon
             ? new St.Icon({gicon: f.gicon, icon_size: 20})
             : new St.Icon({icon_name: 'dialog-information-symbolic', icon_size: 20});
-        icon.y_align = Clutter.ActorAlign.CENTER;
+        icon.y_align = Clutter.ActorAlign.START;
         row.add_child(icon);
         const texts = new St.BoxLayout({
             orientation: Clutter.Orientation.VERTICAL,
+            style_class: 'dn-notif-texts',
             x_expand: true,
         });
         const title = new St.Label({
@@ -1788,11 +1848,17 @@ export default class DynamicNotchExtension extends Extension {
         sub.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
         texts.add_child(sub);
         if (f.body && f.body !== f.title) {
+            // Capped in JS so the wrapped body stays within ~2 lines.
+            const bodyText = f.body.length > 110
+                ? `${f.body.slice(0, 110).trimEnd()}…` : f.body;
             const body = new St.Label({
-                text: f.body,
+                text: bodyText,
                 style_class: 'dn-notif-item-sub',
             });
-            body.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+            const bt = body.get_clutter_text();
+            bt.set_line_wrap(true);
+            bt.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
+            bt.set_ellipsize(Pango.EllipsizeMode.END);
             texts.add_child(body);
         }
         row.add_child(texts);
