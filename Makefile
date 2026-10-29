@@ -2,8 +2,12 @@ UUID = dynamic-notch@faishalmhmd
 EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 SRC_DIR = src
 SCHEMAS_DIR = $(SRC_DIR)/schemas
+DIST_DIR = dist
 
-.PHONY: install uninstall compile-schema debug
+DEFAULT_FILES = extension.js metadata.json stylesheet.css prefs.js schemas
+EXTRA_SOURCES = $(filter-out $(DEFAULT_FILES),$(notdir $(wildcard $(SRC_DIR)/*)))
+
+.PHONY: install uninstall compile-schema debug pack
 
 install:
 	@echo "Installing Dynamic Notch..."
@@ -14,6 +18,13 @@ install:
 
 compile-schema:
 	@glib-compile-schemas $(SCHEMAS_DIR)
+
+pack:
+	@mkdir -p $(DIST_DIR)
+	@cd $(SRC_DIR) && gnome-extensions pack --force --out-dir=../$(DIST_DIR) \
+		$(foreach f,$(EXTRA_SOURCES),--extra-source=$(f)) .
+	@echo "Packed:"
+	@unzip -l $(DIST_DIR)/$(UUID).shell-extension.zip
 
 debug: install
 	@echo "Starting nested GNOME Shell 51..."
