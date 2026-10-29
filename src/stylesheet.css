@@ -55,11 +55,11 @@
     transition-duration: 200ms;
 }
 
-.dn-notch.dn-fg-light {
+.dn-fg-light {
     color: #f5f5f7;
 }
 
-.dn-notch.dn-fg-dark {
+.dn-fg-dark {
     color: #1b1b1f;
 }
 
