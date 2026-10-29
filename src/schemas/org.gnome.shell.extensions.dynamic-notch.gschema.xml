@@ -10,6 +10,22 @@
     <value nick="left" value="2"/>
     <value nick="right" value="3"/>
   </enum>
+  <!-- BARU (refinement v2): mode background panel. Mode kelima "dynamic"
+       TIDAK dimasukkan ke enum ini — perilaku dynamic tetap dipegang
+       key bawaan transparent-panel di bawah, supaya tidak ada dua
+       sumber kebenaran untuk perilaku yang sama. -->
+  <enum id="org.gnome.shell.extensions.dynamic-notch.PanelBgMode">
+    <value nick="theme" value="0"/>
+    <value nick="transparent" value="1"/>
+    <value nick="solid" value="2"/>
+    <value nick="semi-transparent" value="3"/>
+  </enum>
+  <!-- BARU (refinement v2): warna teks/ikon, dipakai panel dan notch. -->
+  <enum id="org.gnome.shell.extensions.dynamic-notch.FgMode">
+    <value nick="auto" value="0"/>
+    <value nick="light" value="1"/>
+    <value nick="dark" value="2"/>
+  </enum>
   <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
     <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
       <default>'apple'</default>
@@ -41,6 +57,29 @@
     <key name="transparent-panel" type="b">
       <default>false</default>
       <summary>Make the top panel transparent when no window is near it</summary>
+    </key>
+    <!-- BARU (refinement v2): background panel saat transparent-panel
+         mati, atau background yang dipakai saat ada jendela menyentuh
+         panel ketika transparent-panel menyala (solid/semi dipakai
+         apa adanya, theme/transparent kembali ke tampilan stock). -->
+    <key name="panel-bg-mode" enum="org.gnome.shell.extensions.dynamic-notch.PanelBgMode">
+      <default>'theme'</default>
+      <summary>Panel background: theme, transparent, solid, or semi-transparent</summary>
+    </key>
+    <!-- BARU (refinement v2) -->
+    <key name="panel-color" type="s">
+      <default>'rgba(24,24,32,0.72)'</default>
+      <summary>Panel color for solid / semi-transparent modes (CSS rgb()/rgba() string; alpha is used by semi-transparent only)</summary>
+    </key>
+    <!-- BARU (refinement v2) -->
+    <key name="panel-text-mode" enum="org.gnome.shell.extensions.dynamic-notch.FgMode">
+      <default>'auto'</default>
+      <summary>Panel text/icon color: auto (from the known panel color), light, or dark</summary>
+    </key>
+    <!-- BARU (refinement v2) -->
+    <key name="notch-text-mode" enum="org.gnome.shell.extensions.dynamic-notch.FgMode">
+      <default>'auto'</default>
+      <summary>Notch text color: auto (from the notch background color), light, or dark</summary>
     </key>
   </schema>
 </schemalist>

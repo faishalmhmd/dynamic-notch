@@ -1,14 +1,87 @@
-/* Dynamic Notch - Simple Clock */
+/* Dynamic Notch — GNOME Shell 51 */
+
+/* ---- Top panel -------------------------------------------------------
+   The transition lives here, not in JS. JS only changes the panel's
+   classes / inline background-color when the desired appearance really
+   changes; St animates background-color between the old and the new
+   computed value because of this transition-duration. The old build
+   re-applied an !important inline style on every window allocation
+   event, which restarted/snapped this transition constantly (flicker
+   after opening/closing the Overview). */
+
+#panel {
+    transition-duration: 300ms;
+}
+
+#panel.dn-panel-transparent {
+    background-color: transparent;
+    background-image: none;
+    background-gradient-direction: none;
+    box-shadow: none;
+}
+
+#panel.dn-panel-transparent .panel-corner {
+    -panel-corner-background-color: transparent;
+    -panel-corner-border-color: transparent;
+}
+
+/* Panel foreground. `color` on the buttons recolors their labels and
+   their symbolic icons (icons follow the actor's foreground color). */
+#panel.dn-fg-light {
+    color: #f5f5f7;
+}
+
+#panel.dn-fg-light .panel-button {
+    color: #f5f5f7;
+}
+
+#panel.dn-fg-dark {
+    color: #1b1b1f;
+}
+
+#panel.dn-fg-dark .panel-button {
+    color: #1b1b1f;
+}
+
+/* Legacy class from older builds — kept so a panel still carrying it
+   (e.g. after an update without a Shell restart) stays transparent
+   instead of snapping back. */
+#panel.transparent-top-bar {
+    background-color: transparent;
+    background-image: none;
+    background-gradient-direction: none;
+    box-shadow: none;
+}
+
+#panel.transparent-top-bar .panel-corner {
+    -panel-corner-background-color: transparent;
+    -panel-corner-border-color: transparent;
+}
+
+/* ---- Notch ----------------------------------------------------------- */
 
 .dn-notch {
     color: #ffffff;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+    transition-duration: 200ms;
+}
+
+.dn-notch.dn-fg-light {
+    color: #f5f5f7;
+}
+
+.dn-notch.dn-fg-dark {
+    color: #1b1b1f;
 }
 
 .dn-notch-apple {
     box-shadow: none;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-top: none;
+}
+
+.dn-notch.dn-fg-dark.dn-notch-apple {
+    border-color: rgba(0, 0, 0, 0.12);
 }
 
 .dn-notch-pill {
@@ -19,6 +92,8 @@
     margin: 0;
     padding: 0;
 }
+
+/* ---- Compact view ----------------------------------------------------- */
 
 .dn-clock-widget {
     spacing: 8px;
@@ -37,29 +112,105 @@
     text-align: center;
 }
 
+.dn-fg-dark .dn-clock-date {
+    color: rgba(0, 0, 0, 0.6);
+}
+
+/* ---- Expanded view ---------------------------------------------------- */
+
+.dn-expanded {
+    padding: 14px 16px;
+    spacing: 10px;
+}
+
+.dn-expanded-head {
+    spacing: 2px;
+    padding-bottom: 2px;
+}
+
 .dn-expanded-clock {
     font-weight: 600;
-    font-size: 32pt;
+    font-size: 30pt;
     font-family: monospace;
     text-align: center;
-    padding: 16px;
 }
 
-#panel.transparent-top-bar,
-.transparent-top-bar {
-    background-color: transparent !important;
-    background-image: none !important;
-    background-gradient-direction: none !important;
-    box-shadow: none !important;
+.dn-expanded-date {
+    font-size: 10pt;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
 }
 
-#panel.transparent-top-bar .panel-corner,
-.transparent-top-bar .panel-corner {
-    -panel-corner-background-color: transparent !important;
-    -panel-corner-border-color: transparent !important;
+.dn-fg-dark .dn-expanded-date {
+    color: rgba(0, 0, 0, 0.6);
 }
 
-#panel.transparent-top-bar:overview,
-.transparent-top-bar:overview {
-    background-color: transparent !important;
+.dn-cards-row {
+    spacing: 10px;
+}
+
+.dn-card {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    padding: 10px 12px;
+    spacing: 6px;
+}
+
+.dn-fg-dark .dn-card {
+    background-color: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-card-head {
+    spacing: 8px;
+}
+
+.dn-card-title {
+    font-weight: 700;
+    font-size: 10.5pt;
+}
+
+.dn-card-body {
+    font-size: 9.5pt;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.dn-fg-dark .dn-card-body {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+.dn-note-entry {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 9.5pt;
+    selection-background-color: rgba(255, 255, 255, 0.3);
+    selected-color: #ffffff;
+}
+
+.dn-fg-dark .dn-note-entry {
+    background-color: rgba(0, 0, 0, 0.08);
+    selection-background-color: rgba(0, 0, 0, 0.25);
+    selected-color: #000000;
+}
+
+.dn-card-button {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 4px 12px;
+    font-size: 9.5pt;
+    font-weight: 600;
+}
+
+.dn-card-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.dn-fg-dark .dn-card-button {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.dn-fg-dark .dn-card-button:hover {
+    background-color: rgba(0, 0, 0, 0.18);
 }
