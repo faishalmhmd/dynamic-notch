@@ -1,8 +1,4 @@
-// Provider notifikasi: mirror semua source di Main.messageTray.
-// Banner stok diblokir (bannerBlocked) supaya notif tampil di notch,
-// bukan banner GNOME. Setelah live-activity selesai ditampilkan,
-// notif ditandai acknowledged supaya antrian banner stok tidak
-// tumpah keluar saat extension di-disable / bannerBlocked dilepas.
+// Provider notifikasi: mirror Main.messageTray, banner stok diblokir via bannerBlocked.
 
 import GLib from 'gi://GLib';
 

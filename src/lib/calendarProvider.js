@@ -1,6 +1,4 @@
-// Provider kalender: instance DBusEventSource sendiri (backend yang
-// sama dengan dateMenu stok: org.gnome.Shell.CalendarServer), jadi
-// UI kalender kita tidak bergantung pada widget stok sama sekali.
+// Provider kalender: instance DBusEventSource sendiri (backend org.gnome.Shell.CalendarServer).
 
 import * as Calendar from 'resource:///org/gnome/shell/ui/calendar.js';
 
@@ -36,9 +34,7 @@ export class CalendarProvider {
         this._cb = null;
     }
 
-    // Range yang diminta ke CalendarServer: grid bulan ini plus margin
-    // lebar di kedua sisi, supaya convention awal-minggu apa pun
-    // (Minggu/Senin) yang dipakai grid UI tetap tercakup.
+    // Range lebar di kedua sisi bulan, agar semua convention awal-minggu tercakup.
     requestVisibleRange() {
         const first = new Date(this.viewMonth.getTime());
         first.setDate(first.getDate() - 14);
