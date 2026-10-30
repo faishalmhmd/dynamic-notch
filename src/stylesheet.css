@@ -216,29 +216,15 @@
   color: #ffffff;
 }
 
-.dn-menu {
-  background-color: rgba(24, 24, 32, 0.97);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 10px;
-  padding: 5px;
-  spacing: 2px;
-  min-width: 168px;
-}
-
-.dn-menu-item {
-  border-radius: 7px;
-  padding: 6px 12px;
-  font-size: 9.5pt;
-}
-
-.dn-menu-item:hover {
-  background-color: rgba(255, 255, 255, 0.14);
-}
-
-.dn-menu-item.dn-menu-danger {
-  background-color: rgba(224, 27, 36, 0.85);
+.dn-app-badge {
+  background-color: rgb(224, 27, 36);
   color: #ffffff;
-  font-weight: 700;
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.dn-app-badge:hover {
+  background-color: rgb(179, 18, 28);
 }
 
 .dn-corner-clock {

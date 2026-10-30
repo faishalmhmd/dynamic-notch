@@ -159,6 +159,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
 
     const appearance = new Adw.PreferencesGroup({ title: "Notch Appearance" });
     appearance.add(colorRow("Notch Background Color", "notch-bg", false));
+    appearance.add(colorRow("Accent Color", "accent-color", false));
     appearance.add(
       enumRow("Notch Text", "notch-text-mode", [
         "Auto (from notch color)",
