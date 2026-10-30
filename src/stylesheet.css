@@ -169,6 +169,10 @@
   spacing: 8px;
 }
 
+.dn-page-clipboard {
+  spacing: 6px;
+}
+
 .dn-tab-bar {
   spacing: 2px;
   padding-left: 10px;

@@ -16,6 +16,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
 import { SystemEventsProvider } from "./lib/event.js";
+import { ClipboardProvider } from "./lib/clipboard.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
@@ -98,6 +99,7 @@ function formatDateTime(now) {
 const QA_DEFS = [
   ["dnd", "notifications-disabled-symbolic", "Do Not Disturb"],
   ["timer", "alarm-symbolic", "Timer"],
+  ["clipboard", "edit-paste-symbolic", "Clipboard"],
   ["today", "x-office-calendar-symbolic", "Today"],
   ["clear", "edit-clear-symbolic", "Clear Notifications"],
   ["settings", "preferences-system-symbolic", "Extension Settings"],
@@ -106,6 +108,7 @@ const QA_DEFS = [
 const TAB_DEFS = [
   ["main", "Main", "x-office-calendar-symbolic"],
   ["timer", "Timer", "alarm-symbolic"],
+  ["clipboard", "Clipboard", "edit-paste-symbolic"],
 ];
 
 const ICON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_.]*$/;
@@ -136,6 +139,7 @@ export default class DynamicNotchExtension extends Extension {
     this._calProvider = null;
     this._calAvailable = false;
     this._eventsProvider = null;
+    this._clipProvider = null;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -279,8 +283,8 @@ export default class DynamicNotchExtension extends Extension {
 
     this._updatePanelAppearance();
     this._initProviders();
-    this._initClipboardWatch();
     this._initApps();
+    this._refreshClipList();
     this._renderCalendar();
     this._renderTimer();
     this._syncDndButton();
@@ -327,6 +331,12 @@ export default class DynamicNotchExtension extends Extension {
         this._eventsProvider.destroy();
       } catch (_e) {}
       this._eventsProvider = null;
+    }
+    if (this._clipProvider) {
+      try {
+        this._clipProvider.destroy();
+      } catch (_e) {}
+      this._clipProvider = null;
     }
     for (const proc of this._scriptProcs ?? []) {
       try {
@@ -381,13 +391,6 @@ export default class DynamicNotchExtension extends Extension {
       this._desktopNotifSettings.disconnect(this._dndChangedId);
     this._dndChangedId = 0;
     this._desktopNotifSettings = null;
-    if (this._selection && this._selectionChangedId) {
-      try {
-        this._selection.disconnect(this._selectionChangedId);
-      } catch (_e) {}
-    }
-    this._selectionChangedId = 0;
-    this._selection = null;
 
     // Signals connected on our own actors (ids stored at build time).
     if (this._clockWidget && this._clockPressId)
@@ -487,6 +490,7 @@ export default class DynamicNotchExtension extends Extension {
     this._peekView?.destroy();
     this._eventView?.destroy();
     this._notifScroll?.destroy();
+    this._clipScroll?.destroy();
     this._notifList?.destroy();
     this._appsRow?.destroy();
     this._tabBar?.destroy();
@@ -494,6 +498,7 @@ export default class DynamicNotchExtension extends Extension {
     this._qaBar?.destroy();
     this._pageMain?.destroy();
     this._pageTimer?.destroy();
+    this._pageClipboard?.destroy();
     this._clockWidget?.destroy();
     this._expandedView?.destroy();
     this._backdrop?.destroy();
@@ -522,6 +527,10 @@ export default class DynamicNotchExtension extends Extension {
     this._clearButton = null;
     this._notifList = null;
     this._notifScroll = null;
+    this._clipList = null;
+    this._clipScroll = null;
+    this._clipEmpty = null;
+    this._clipClearButton = null;
     this._playPauseIcon = null;
     this._playPauseLabel = null;
     this._timerLabel = null;
@@ -537,6 +546,7 @@ export default class DynamicNotchExtension extends Extension {
     this._qaBar = null;
     this._pageMain = null;
     this._pageTimer = null;
+    this._pageClipboard = null;
     this._expandedView = null;
     this._backdrop = null;
     this._clipper = null;
@@ -865,6 +875,8 @@ export default class DynamicNotchExtension extends Extension {
     this._tabProgressTrack.add_child(this._tabProgressFill);
     this._pageTimer.add_child(this._tabProgressTrack);
     root.add_child(this._pageTimer);
+    this._pageClipboard = this._buildClipboardPage();
+    root.add_child(this._pageClipboard);
     this._setTab("main");
     return root;
   }
@@ -999,6 +1011,8 @@ export default class DynamicNotchExtension extends Extension {
     if (id === "dnd") this._toggleDnd();
     else if (id === "timer")
       this._setTab(this._page === "timer" ? "main" : "timer");
+    else if (id === "clipboard")
+      this._setTab(this._page === "clipboard" ? "main" : "clipboard");
     else if (id === "today") {
       this._setTab("main");
       this._qaCalendarToday();
@@ -1035,6 +1049,7 @@ export default class DynamicNotchExtension extends Extension {
     this._page = name;
     if (this._pageMain) this._pageMain.visible = name === "main";
     if (this._pageTimer) this._pageTimer.visible = name === "timer";
+    if (this._pageClipboard) this._pageClipboard.visible = name === "clipboard";
     this._hideTooltip();
     this._syncQaStates();
   }
@@ -1713,6 +1728,116 @@ export default class DynamicNotchExtension extends Extension {
     this._notifScroll.add_child(this._notifList);
     box.add_child(this._notifScroll);
     return box;
+  }
+
+  // --- Tab 3: clipboard history ---
+  _buildClipboardPage() {
+    const page = new St.BoxLayout({
+      style_class: "dn-page-clipboard",
+      orientation: Clutter.Orientation.VERTICAL,
+      y_expand: true,
+      visible: false,
+    });
+    const header = new St.BoxLayout({ style_class: "dn-notif-header" });
+    header.add_child(
+      new St.Icon({
+        icon_name: "edit-paste-symbolic",
+        icon_size: 16,
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    header.add_child(
+      new St.Label({
+        text: "Clipboard History",
+        style_class: "dn-card-title",
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    header.add_child(new St.Widget({ x_expand: true }));
+    this._clipClearButton = new St.Button({
+      label: "Clear history",
+      style_class: "dn-small-button",
+    });
+    this._clipClearButton.connect("clicked", () => {
+      try {
+        this._clipProvider?.clear();
+      } catch (e) {
+        logError(e, "dynamic-notch: clear clipboard history failed");
+      }
+    });
+    header.add_child(this._clipClearButton);
+    page.add_child(header);
+    this._clipEmpty = new St.Label({
+      text: "Nothing copied yet",
+      style_class: "dn-card-body",
+    });
+    page.add_child(this._clipEmpty);
+    this._clipList = new St.BoxLayout({
+      style_class: "dn-notif-list",
+      orientation: Clutter.Orientation.VERTICAL,
+    });
+    const scroll = new St.ScrollView({
+      style_class: "dn-notif-scroll",
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      overlay_scrollbars: true,
+      y_expand: true,
+    });
+    scroll.add_child(this._clipList);
+    this._clipScroll = scroll;
+    page.add_child(scroll);
+    return page;
+  }
+
+  _refreshClipList() {
+    if (!this._clipList) return;
+    this._clipList.destroy_all_children();
+    const items = this._clipProvider?.getAll() ?? [];
+    this._clipEmpty.visible = items.length === 0;
+    if (this._clipClearButton) {
+      this._clipClearButton.reactive = items.length > 0;
+      this._clipClearButton.opacity = items.length > 0 ? 255 : 120;
+    }
+    for (const item of items)
+      this._clipList.add_child(this._makeClipItem(item));
+  }
+
+  _makeClipItem(item) {
+    const button = new St.Button({
+      style_class: "dn-notif-item",
+      x_expand: true,
+    });
+    button.x_align = Clutter.ActorAlign.FILL;
+    const texts = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-notif-texts",
+      x_expand: true,
+    });
+    // One-line preview: whitespace collapses, long text ellipsizes.
+    const preview = new St.Label({
+      text: item.text.replace(/\s+/g, " ").trim(),
+      style_class: "dn-notif-item-title",
+    });
+    preview.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    texts.add_child(preview);
+    texts.add_child(
+      new St.Label({
+        text:
+          `${this._fmtTimeJS(new Date(item.time))} · ` +
+          `${item.text.length} chars`,
+        style_class: "dn-notif-item-sub",
+      }),
+    );
+    button.child = texts;
+    button.connect("clicked", () => {
+      try {
+        this._clipProvider?.restore(item);
+      } catch (e) {
+        logError(e, "dynamic-notch: clipboard restore failed");
+      }
+    });
+    this._addTooltip(button, "Copy back to clipboard");
+    return button;
   }
 
   // --- Timer strip (bottom, cols 2-5 of row 5) ---
@@ -2405,33 +2530,8 @@ export default class DynamicNotchExtension extends Extension {
 
   // -------------------------------------------- providers / integration
 
-  // Copy feedback from clipboard OWNER changes (MetaSelection):
-  // no keyboard hooks, content never read, fully guarded.
-  _initClipboardWatch() {
-    this._selection = null;
-    this._selectionChangedId = 0;
-    this._lastCopyPeekUs = 0;
-    try {
-      const selection = global.display.get_selection();
-      if (!selection?.connect) return;
-      this._selection = selection;
-      this._selectionChangedId = selection.connect(
-        "owner-changed",
-        (_s, type, owner) => {
-          if (!owner) return;
-          try {
-            if (Meta.SelectionType && type !== Meta.SelectionType.CLIPBOARD)
-              return;
-          } catch (_e) {}
-          this._onClipboardOwnerChanged();
-        },
-      );
-    } catch (_e) {
-      this._selection = null;
-      this._selectionChangedId = 0;
-    }
-  }
-
+  // Copy peek, fired by the clipboard provider after each capture:
+  // rate-limited, and never over another peek.
   _onClipboardOwnerChanged() {
     const now = GLib.get_monotonic_time();
     if (now - this._lastCopyPeekUs < 1200000) return; // one peek per copy action, not per signal burst
@@ -2491,6 +2591,19 @@ export default class DynamicNotchExtension extends Extension {
     } catch (e) {
       logError(e, "dynamic-notch: system events unavailable");
       this._eventsProvider = null;
+    }
+
+    // Clipboard history (Tab 3) and the copy peek.
+    this._lastCopyPeekUs = 0;
+    try {
+      this._clipProvider = new ClipboardProvider({
+        onChanged: () => this._refreshClipList(),
+        onCopy: () => this._onClipboardOwnerChanged(),
+      });
+      this._clipProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: clipboard history unavailable");
+      this._clipProvider = null;
     }
 
     // Do Not Disturb quick action (desktop notifications schema).
