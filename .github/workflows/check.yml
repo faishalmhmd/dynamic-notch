@@ -40,14 +40,13 @@ jobs:
       - name: GSettings schema (strict)
         run: glib-compile-schemas --strict --dry-run src/schemas
 
-      - name: Installer smoke test
+      - name: Install smoke test (Makefile)
         run: |
           set -e
-          sh -n dynamic-notch.sh
           tmp="$(mktemp -d)"
-          HOME="$tmp" sh ./dynamic-notch.sh
+          HOME="$tmp" make install
           diff -r --exclude=gschemas.compiled \
-            src "$tmp/.local/share/gnome-shell/extensions/dynamic-notch@local"
+            src "$tmp/.local/share/gnome-shell/extensions/dynamic-notch@faishalmhmd"
 
       # EGO lint (shexli) is intentionally not wired in yet: it
       # segfaults on this extension.js in local runs, so it would
