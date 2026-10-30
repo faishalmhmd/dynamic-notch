@@ -26,7 +26,6 @@ const PANEL_DEBOUNCE_MS = 100;
 const NOTIF_PEEK_MS = 4500;
 const TIMER_PEEK_MS = 6000;
 const EVENT_MS = 2800;
-const MAX_NOTIF_ITEMS = 5;
 const MAX_APPS = 12;
 const FILLET_R = 10;
 
@@ -487,6 +486,7 @@ export default class DynamicNotchExtension extends Extension {
     this._btnReset?.destroy();
     this._peekView?.destroy();
     this._eventView?.destroy();
+    this._notifScroll?.destroy();
     this._notifList?.destroy();
     this._appsRow?.destroy();
     this._tabBar?.destroy();
@@ -521,6 +521,7 @@ export default class DynamicNotchExtension extends Extension {
     this._notifEmpty = null;
     this._clearButton = null;
     this._notifList = null;
+    this._notifScroll = null;
     this._playPauseIcon = null;
     this._playPauseLabel = null;
     this._timerLabel = null;
@@ -632,7 +633,7 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._timerProgressTrack.set_size(56, 4);
     this._timerProgressFill = new St.Widget({
-      style: "background-color: #2ec27e; border-radius: 999px;",
+      style: this._progressStyle(),
     });
     this._timerProgressFill.set_size(0, 4);
     this._timerProgressTrack.add_child(this._timerProgressFill);
@@ -858,7 +859,7 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._tabProgressTrack.set_height(4);
     this._tabProgressFill = new St.Widget({
-      style: "background-color: #2ec27e; border-radius: 999px;",
+      style: this._progressStyle(),
     });
     this._tabProgressFill.set_size(0, 4);
     this._tabProgressTrack.add_child(this._tabProgressFill);
@@ -1391,12 +1392,12 @@ export default class DynamicNotchExtension extends Extension {
     let iconActor = null;
     try {
       // The app's own icon, resolved by the Shell (never a bundled file).
-      iconActor = app.create_icon_texture(26);
+      iconActor = app.create_icon_texture(36);
     } catch (_e) {}
     if (!iconActor) {
       iconActor = new St.Icon({
         icon_name: "application-x-executable-symbolic",
-        icon_size: 26,
+        icon_size: 36,
       });
     }
     btn.child = iconActor;
@@ -1409,17 +1410,20 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._addTooltip(btn, background ? `${name} (background)` : name);
     wrap.add_child(btn);
-    // Always-visible red close button in the icon's top-right corner.
+    // Always-visible red close button on the icon's bottom-right
+    // corner, nudged outward so it covers less of the icon.
     const badge = new St.Button({
       style_class: "dn-app-badge",
       accessible_name: `Close ${name}`,
       child: new St.Icon({
         icon_name: "window-close-symbolic",
-        icon_size: 12,
+        icon_size: 10,
       }),
       x_align: Clutter.ActorAlign.END,
-      y_align: Clutter.ActorAlign.START,
+      y_align: Clutter.ActorAlign.END,
     });
+    badge.translation_x = 8;
+    badge.translation_y = 8;
     badge.connect("clicked", () => this._closeOrKillApp(app));
     wrap.add_child(badge);
     return wrap;
@@ -1693,13 +1697,21 @@ export default class DynamicNotchExtension extends Extension {
     });
     box.add_child(this._notifEmpty);
 
-    // Plain box, capped at MAX_NOTIF_ITEMS rows — deliberately no
-    // ScrollView, so no scrollbar can ever appear mid-animation.
+    // The list scrolls inside its own viewport: however many
+    // notifications pile up, the apps strip below stays put.
     this._notifList = new St.BoxLayout({
       style_class: "dn-notif-list",
       orientation: Clutter.Orientation.VERTICAL,
     });
-    box.add_child(this._notifList);
+    this._notifScroll = new St.ScrollView({
+      style_class: "dn-notif-scroll",
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      overlay_scrollbars: true,
+      y_expand: true,
+    });
+    this._notifScroll.add_child(this._notifList);
+    box.add_child(this._notifScroll);
     return box;
   }
 
@@ -2809,16 +2821,7 @@ export default class DynamicNotchExtension extends Extension {
     this._notifEmpty.text = this._notifAvailable
       ? "No notifications"
       : "Notifications unavailable";
-    for (const n of all.slice(0, MAX_NOTIF_ITEMS))
-      this._notifList.add_child(this._makeNotifItem(n));
-    if (all.length > MAX_NOTIF_ITEMS) {
-      this._notifList.add_child(
-        new St.Label({
-          text: `+${all.length - MAX_NOTIF_ITEMS} more…`,
-          style_class: "dn-card-body",
-        }),
-      );
-    }
+    for (const n of all) this._notifList.add_child(this._makeNotifItem(n));
     this._syncQaStates();
   }
 
@@ -2828,7 +2831,7 @@ export default class DynamicNotchExtension extends Extension {
       style_class: "dn-notif-item",
       x_expand: true,
     });
-    button.x_align = Clutter.ActorAlign.START;
+    button.x_align = Clutter.ActorAlign.FILL;
     const row = new St.BoxLayout({
       style_class: "dn-notif-row",
       x_expand: true,
@@ -2935,6 +2938,16 @@ export default class DynamicNotchExtension extends Extension {
           : "",
       );
     }
+    for (const f of [this._timerProgressFill, this._tabProgressFill])
+      f?.set_style(this._progressStyle());
+  }
+
+  // Timer progress fills wear the accent color at full strength.
+  _progressStyle() {
+    return (
+      `background-color: ${this._accentWithAlpha(1)};` +
+      " border-radius: 999px;"
+    );
   }
 
   _renderCalendar() {

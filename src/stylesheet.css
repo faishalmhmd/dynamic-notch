@@ -220,7 +220,7 @@
   background-color: rgb(224, 27, 36);
   color: #ffffff;
   border-radius: 999px;
-  padding: 4px;
+  padding: 1px;
 }
 
 .dn-app-badge:hover {
@@ -405,6 +405,25 @@
 
 .dn-notif-list {
   spacing: 3px;
+  padding: 2px 10px 2px 2px;
+}
+
+.dn-notif-scroll StScrollBar {
+  width: 6px;
+  padding: 0;
+}
+
+.dn-notif-scroll StScrollBar StBin#trough {
+  background-color: transparent;
+}
+
+.dn-notif-scroll StScrollBar StBin#vhandle {
+  background-color: rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+}
+
+.dn-fg-dark .dn-notif-scroll StScrollBar StBin#vhandle {
+  background-color: rgba(0, 0, 0, 0.28);
 }
 
 .dn-notif-texts {
@@ -413,7 +432,7 @@
 
 .dn-notif-item {
   border-radius: 8px;
-  padding: 4px 6px 4px 2px;
+  padding: 6px 8px;
   text-align: left;
 }
 
