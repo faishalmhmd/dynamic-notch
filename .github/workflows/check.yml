@@ -1,0 +1,55 @@
+name: Check
+
+# Error checking only: no build, packaging or deploy steps.
+# Runs on pushes to the 'check' branch, and on every pull request.
+on:
+  push:
+    branches: [check]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install GLib tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-bin
+
+      - name: JavaScript syntax check
+        run: |
+          set -e
+          for f in src/extension.js src/prefs.js src/lib/*.js; do
+            tmp="$(mktemp --suffix=.mjs)"
+            cp "$f" "$tmp"
+            node --check "$tmp"
+            echo "OK $f"
+          done
+
+      - name: metadata.json validity
+        run: python3 -m json.tool src/metadata.json > /dev/null
+
+      - name: GSettings schema (strict)
+        run: glib-compile-schemas --strict --dry-run src/schemas
+
+      - name: Installer smoke test
+        run: |
+          set -e
+          sh -n dynamic-notch.sh
+          tmp="$(mktemp -d)"
+          HOME="$tmp" sh ./dynamic-notch.sh
+          diff -r --exclude=gschemas.compiled \
+            src "$tmp/.local/share/gnome-shell/extensions/dynamic-notch@local"
+
+      # EGO lint (shexli) is intentionally not wired in yet: it
+      # segfaults on this extension.js in local runs, so it would
+      # report infrastructure failures instead of code errors.
+      # Add it as a continue-on-error step once it runs reliably.
