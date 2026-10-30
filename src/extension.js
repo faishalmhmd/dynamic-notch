@@ -15,6 +15,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 
 import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
+import { SystemEventsProvider } from "./lib/event.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
@@ -24,7 +25,7 @@ const ANIM_MS = 260;
 const PANEL_DEBOUNCE_MS = 100;
 const NOTIF_PEEK_MS = 4500;
 const TIMER_PEEK_MS = 6000;
-const MAX_NOTIF_ITEMS = 5;
+const EVENT_MS = 2800;
 const MAX_APPS = 12;
 const FILLET_R = 10;
 
@@ -124,11 +125,17 @@ export default class DynamicNotchExtension extends Extension {
     this._peekActive = false;
     this._peekTimeoutId = 0;
 
+    // System event display (transient, centered icon + text)
+    this._eventActive = false;
+    this._eventTimeoutId = 0;
+    this._eventNaturalW = 0;
+
     // Providers (created in _initProviders, failure-isolated)
     this._notifProvider = null;
     this._notifAvailable = false;
     this._calProvider = null;
     this._calAvailable = false;
+    this._eventsProvider = null;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -144,8 +151,12 @@ export default class DynamicNotchExtension extends Extension {
     this._windowCreatedId = 0;
     this._appsDebounceId = 0;
     this._appsWindowIds = new Map();
-    this._killArm = null;
-    this._killArmTimeoutId = 0;
+    this._actorSignalIds = new Map();
+    this._windowSignalIds = new Map();
+    this._scopeApps = new Map();
+    this._appUnits = new Map();
+    this._sdUnitNewId = 0;
+    this._sdUnitRemovedId = 0;
 
     // Do Not Disturb via org.gnome.desktop.notifications show-banners
     this._desktopNotifSettings = null;
@@ -209,6 +220,7 @@ export default class DynamicNotchExtension extends Extension {
       this._refreshGeometry();
       this._updatePanelAppearance();
       if (key === "topbar-icons") this._buildQaButtons();
+      if (key === "accent-color") this._applyAccent();
     });
     this._monitorsChangedId = Main.layoutManager.connect(
       "monitors-changed",
@@ -219,9 +231,6 @@ export default class DynamicNotchExtension extends Extension {
     );
 
     // --- Panel background tracking ---
-    this._actorSignalIds = new Map();
-    this._windowSignalIds = new Map();
-
     this._actorSignalIds.set(Main.overview, [
       Main.overview.connect("showing", () => {
         // Opening the Overview counts as interacting outside the
@@ -290,6 +299,8 @@ export default class DynamicNotchExtension extends Extension {
     this._closeIdleId = 0;
     if (this._peekTimeoutId) GLib.source_remove(this._peekTimeoutId);
     this._peekTimeoutId = 0;
+    if (this._eventTimeoutId) GLib.source_remove(this._eventTimeoutId);
+    this._eventTimeoutId = 0;
     if (this._timerTimeoutId) GLib.source_remove(this._timerTimeoutId);
     this._timerTimeoutId = 0;
     if (this._timerFinishTimeoutId)
@@ -297,8 +308,6 @@ export default class DynamicNotchExtension extends Extension {
     this._timerFinishTimeoutId = 0;
     if (this._appsDebounceId) GLib.source_remove(this._appsDebounceId);
     this._appsDebounceId = 0;
-    if (this._killArmTimeoutId) GLib.source_remove(this._killArmTimeoutId);
-    this._killArmTimeoutId = 0;
 
     // Providers first: restore stock banners while our actors still exist.
     if (this._notifProvider) {
@@ -312,6 +321,12 @@ export default class DynamicNotchExtension extends Extension {
         this._calProvider.destroy();
       } catch (_e) {}
       this._calProvider = null;
+    }
+    if (this._eventsProvider) {
+      try {
+        this._eventsProvider.destroy();
+      } catch (_e) {}
+      this._eventsProvider = null;
     }
     for (const proc of this._scriptProcs ?? []) {
       try {
@@ -340,7 +355,28 @@ export default class DynamicNotchExtension extends Extension {
       this._appsWindowIds.clear();
       this._appsWindowIds = null;
     }
-    this._killArm = null;
+    if (this._sdUnitNewId)
+      Gio.DBus.session.signal_unsubscribe(this._sdUnitNewId);
+    this._sdUnitNewId = 0;
+    if (this._sdUnitRemovedId)
+      Gio.DBus.session.signal_unsubscribe(this._sdUnitRemovedId);
+    this._sdUnitRemovedId = 0;
+    try {
+      Gio.DBus.session.call(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "Unsubscribe",
+        null,
+        null,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        null,
+      );
+    } catch (_e) {}
+    this._scopeApps = null;
+    this._appUnits = null;
     if (this._desktopNotifSettings && this._dndChangedId)
       this._desktopNotifSettings.disconnect(this._dndChangedId);
     this._dndChangedId = 0;
@@ -424,6 +460,8 @@ export default class DynamicNotchExtension extends Extension {
     this._peekTitle?.destroy();
     this._peekBody?.destroy();
     this._peekCloseBtn?.destroy();
+    this._eventIcon?.destroy();
+    this._eventLabel?.destroy();
     this._clockTime?.destroy();
     this._timerChipLabel?.destroy();
     this._timerProgressFill?.destroy();
@@ -447,6 +485,8 @@ export default class DynamicNotchExtension extends Extension {
     this._btnPlayPause?.destroy();
     this._btnReset?.destroy();
     this._peekView?.destroy();
+    this._eventView?.destroy();
+    this._notifScroll?.destroy();
     this._notifList?.destroy();
     this._appsRow?.destroy();
     this._tabBar?.destroy();
@@ -456,7 +496,6 @@ export default class DynamicNotchExtension extends Extension {
     this._pageTimer?.destroy();
     this._clockWidget?.destroy();
     this._expandedView?.destroy();
-    this._appMenu?.destroy();
     this._backdrop?.destroy();
     this._clipper?.destroy();
     this._peekIcon = null;
@@ -464,6 +503,9 @@ export default class DynamicNotchExtension extends Extension {
     this._peekBody = null;
     this._peekCloseBtn = null;
     this._peekView = null;
+    this._eventIcon = null;
+    this._eventLabel = null;
+    this._eventView = null;
     this._clockTime = null;
     this._clockWidget = null;
     this._timerChip = null;
@@ -479,6 +521,7 @@ export default class DynamicNotchExtension extends Extension {
     this._notifEmpty = null;
     this._clearButton = null;
     this._notifList = null;
+    this._notifScroll = null;
     this._playPauseIcon = null;
     this._playPauseLabel = null;
     this._timerLabel = null;
@@ -495,7 +538,6 @@ export default class DynamicNotchExtension extends Extension {
     this._pageMain = null;
     this._pageTimer = null;
     this._expandedView = null;
-    this._appMenu = null;
     this._backdrop = null;
     this._clipper = null;
     this._peekNotification = null;
@@ -591,7 +633,7 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._timerProgressTrack.set_size(56, 4);
     this._timerProgressFill = new St.Widget({
-      style: "background-color: #2ec27e; border-radius: 999px;",
+      style: this._progressStyle(),
     });
     this._timerProgressFill.set_size(0, 4);
     this._timerProgressTrack.add_child(this._timerProgressFill);
@@ -689,6 +731,27 @@ export default class DynamicNotchExtension extends Extension {
     );
     this._clipper.add_child(this._peekView);
 
+    // --- Event view: system events, centered icon + text ---
+    this._eventView = new St.BoxLayout({
+      style_class: "dn-event",
+      visible: false,
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventIcon = new St.Icon({
+      icon_name: "dialog-information-symbolic",
+      icon_size: 18,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventView.add_child(this._eventIcon);
+    this._eventLabel = new St.Label({
+      style_class: "dn-event-label",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventLabel.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    this._eventView.add_child(this._eventLabel);
+    this._clipper.add_child(this._eventView);
+
     // --- Expanded view: one fixed layout ---
     this._expandedView = new St.Widget({
       style_class: "dn-expanded",
@@ -705,12 +768,6 @@ export default class DynamicNotchExtension extends Extension {
       visible: false,
     });
     this._clipper.add_child(this._tooltip);
-    this._appMenu = new St.BoxLayout({
-      orientation: Clutter.Orientation.VERTICAL,
-      style_class: "dn-menu",
-      visible: false,
-    });
-    this._notch.add_child(this._appMenu);
   }
 
   // One fixed layout: top bar, calendar + notifications, apps row.
@@ -802,7 +859,7 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._tabProgressTrack.set_height(4);
     this._tabProgressFill = new St.Widget({
-      style: "background-color: #2ec27e; border-radius: 999px;",
+      style: this._progressStyle(),
     });
     this._tabProgressFill.set_size(0, 4);
     this._tabProgressTrack.add_child(this._tabProgressFill);
@@ -960,8 +1017,13 @@ export default class DynamicNotchExtension extends Extension {
   _setTab(name) {
     this._showPage(name);
     for (const [id, b] of this._tabButtons ?? []) {
-      if (id === name) b.add_style_class_name("dn-tab-active");
-      else b.remove_style_class_name("dn-tab-active");
+      if (id === name) {
+        b.add_style_class_name("dn-tab-active");
+        b.set_style(`background-color: ${this._accentWithAlpha(0.32)};`);
+      } else {
+        b.remove_style_class_name("dn-tab-active");
+        b.set_style("");
+      }
     }
     // Switching tabs resizes the open panel to the tab's own size.
     if (this._state === State.EXPANDED || this._state === State.EXPANDING)
@@ -973,7 +1035,6 @@ export default class DynamicNotchExtension extends Extension {
     this._page = name;
     if (this._pageMain) this._pageMain.visible = name === "main";
     if (this._pageTimer) this._pageTimer.visible = name === "timer";
-    this._closeAppMenu();
     this._hideTooltip();
     this._syncQaStates();
   }
@@ -1025,6 +1086,7 @@ export default class DynamicNotchExtension extends Extension {
       this._showTooltip(actor, text),
     );
     const leaveId = actor.connect("leave-event", () => this._hideTooltip());
+    if (!this._actorSignalIds) this._actorSignalIds = new Map();
     const ids = this._actorSignalIds.get(actor) ?? [];
     ids.push(enterId, leaveId);
     this._actorSignalIds.set(actor, ids);
@@ -1079,6 +1141,7 @@ export default class DynamicNotchExtension extends Extension {
         this._scheduleAppsRefresh(),
       );
       this._refreshApps();
+      this._startScopeTracking();
     } catch (e) {
       logError(e, "dynamic-notch: running-apps unavailable");
       this._appSystem = null;
@@ -1094,15 +1157,133 @@ export default class DynamicNotchExtension extends Extension {
     });
   }
 
+  // Windowless apps that AppSystem drops (Steam closed to the
+  // background) stay alive in their systemd app scope — track those.
+  _startScopeTracking() {
+    try {
+      const bus = Gio.DBus.session;
+      bus.call(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "Subscribe",
+        null,
+        null,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        (conn, res) => {
+          try {
+            conn.call_finish(res);
+          } catch (e) {
+            logError(e, "dynamic-notch: systemd subscribe failed");
+          }
+        },
+      );
+      const onUnit = (_c, _s, _p, _i, _m, params) => {
+        const [id] = params.deepUnpack();
+        if (id?.startsWith("app-") && id.endsWith(".scope"))
+          this._refreshScopes();
+      };
+      this._sdUnitNewId = bus.signal_subscribe(
+        null,
+        "org.freedesktop.systemd1.Manager",
+        "UnitNew",
+        "/org/freedesktop/systemd1",
+        null,
+        Gio.DBusSignalFlags.NONE,
+        onUnit,
+      );
+      this._sdUnitRemovedId = bus.signal_subscribe(
+        null,
+        "org.freedesktop.systemd1.Manager",
+        "UnitRemoved",
+        "/org/freedesktop/systemd1",
+        null,
+        Gio.DBusSignalFlags.NONE,
+        onUnit,
+      );
+      this._refreshScopes();
+    } catch (e) {
+      logError(e, "dynamic-notch: scope tracking unavailable");
+    }
+  }
+
+  _refreshScopes() {
+    Gio.DBus.session.call(
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      "ListUnits",
+      null,
+      new GLib.VariantType("(a(sssssouso))"),
+      Gio.DBusCallFlags.NONE,
+      -1,
+      null,
+      (conn, res) => {
+        try {
+          const out = conn.call_finish(res);
+          const found = new Map();
+          const list = out.get_child_value(0);
+          for (let i = 0; i < list.n_children(); i++) {
+            const unit = list.get_child_value(i);
+            const name = unit.get_child_value(0).get_string()[0];
+            const active = unit.get_child_value(3).get_string()[0];
+            if (
+              active !== "active" ||
+              !name.startsWith("app-") ||
+              !name.endsWith(".scope")
+            )
+              continue;
+            const appId = this._desktopIdFromScope(name);
+            if (!appId) continue;
+            if (!found.has(appId)) found.set(appId, []);
+            found.get(appId).push(name);
+          }
+          this._scopeApps = found;
+          this._scheduleAppsRefresh();
+        } catch (e) {
+          logError(e, "dynamic-notch: listing systemd units failed");
+        }
+      },
+    );
+  }
+
+  _desktopIdFromScope(unit) {
+    // app[-<launcher>]-<ApplicationID>-<random>.scope (the systemd
+    // desktop convention); dashes in the ID are escaped as \x2d.
+    if (!this._appSystem) return null;
+    const m = unit.match(/^app-(.+)-\d+\.scope$/);
+    if (!m) return null;
+    const rest = m[1].replace(/\\x2d/g, "-");
+    const candidates = [];
+    const dash = rest.indexOf("-");
+    if (dash > 0) candidates.push(rest.slice(dash + 1));
+    candidates.push(rest);
+    for (const cand of candidates) {
+      const app =
+        this._appSystem.lookup_app(`${cand}.desktop`) ??
+        this._appSystem.lookup_app(cand);
+      // Only real user apps: should_show() hides session helpers
+      // (SettingsDaemon autostart entries have scopes too).
+      if (app?.get_app_info()?.should_show()) return app.get_id();
+    }
+    return null;
+  }
+
   _refreshApps() {
     if (!this._appsRow) return;
-    // Two sources, deduped by app id: AppSystem's running list and
-    // the apps behind the actual window actors (ground truth).
+    // Sources, deduped by app id: AppSystem's running list, the
+    // window actors, and systemd app scopes (background apps).
     const byId = new Map();
     if (this._appSystem) {
       try {
         for (const app of this._appSystem.get_running()) {
-          if (app.get_windows().length > 0) byId.set(app.get_id(), app);
+          if (
+            app.get_windows().length > 0 ||
+            app.get_state() === Shell.AppState.RUNNING
+          )
+            byId.set(app.get_id(), app);
         }
       } catch (e) {
         logError(e, "dynamic-notch: reading running apps failed");
@@ -1118,6 +1299,17 @@ export default class DynamicNotchExtension extends Extension {
       }
     } catch (e) {
       logError(e, "dynamic-notch: window scan for apps failed");
+    }
+    // Scope-only apps: alive in systemd but windowless and gone
+    // from AppSystem (Steam & co. after their window closes).
+    this._appUnits = new Map();
+    for (const [appId, units] of this._scopeApps ?? []) {
+      if (byId.has(appId) || !this._appSystem) continue;
+      const app = this._appSystem.lookup_app(appId);
+      if (app && app.get_windows().length === 0) {
+        byId.set(appId, app);
+        this._appUnits.set(appId, units);
+      }
     }
     const apps = [...byId.values()];
     // Most recently used first, from each app's newest window.
@@ -1150,9 +1342,6 @@ export default class DynamicNotchExtension extends Extension {
       }
     }
 
-    if (this._killArm && GLib.get_monotonic_time() > this._killArm.until)
-      this._killArm = null;
-
     this._appsRow.destroy_all_children();
     if (apps.length === 0) {
       this._appsRow.add_child(
@@ -1177,96 +1366,138 @@ export default class DynamicNotchExtension extends Extension {
     }
   }
 
+  // Crash-safe display name: get_name() on a window-backed app
+  // asserts once its last window is gone (the v34 Shell abort).
+  _appDisplayName(app) {
+    try {
+      if (app.get_app_info()) return app.get_name() || "Application";
+    } catch (_e) {}
+    const win = app.get_windows()[0];
+    return win?.get_wm_class() || win?.get_title() || "Application";
+  }
+
   _makeAppEntry(app) {
-    const name = app.get_name() || "Application";
+    const name = this._appDisplayName(app);
+    const background = app.get_windows().length === 0;
+    const wrap = new St.Widget({
+      layout_manager: new Clutter.BinLayout(),
+      opacity: background ? 170 : 255,
+    });
     const btn = new St.Button({
       style_class: "dn-app-button",
       accessible_name: name,
+      x_expand: true,
+      y_expand: true,
     });
     let iconActor = null;
     try {
       // The app's own icon, resolved by the Shell (never a bundled file).
-      iconActor = app.create_icon_texture(26);
+      iconActor = app.create_icon_texture(36);
     } catch (_e) {}
     if (!iconActor) {
       iconActor = new St.Icon({
         icon_name: "application-x-executable-symbolic",
-        icon_size: 26,
+        icon_size: 36,
       });
     }
     btn.child = iconActor;
     btn.connect("clicked", () => {
-      this._closeAppMenu();
       try {
         app.activate();
       } catch (e) {
         logError(e, "dynamic-notch: app activation failed");
       }
     });
-    btn.connect("button-press-event", (_a, event) => {
-      if (event.get_button() === 3) {
-        this._openAppMenu(app, btn);
-        return Clutter.EVENT_STOP;
-      }
-      return Clutter.EVENT_PROPAGATE;
+    this._addTooltip(btn, background ? `${name} (background)` : name);
+    wrap.add_child(btn);
+    // Always-visible red close button on the icon's bottom-right
+    // corner, nudged outward so it covers less of the icon.
+    const badge = new St.Button({
+      style_class: "dn-app-badge",
+      accessible_name: `Close ${name}`,
+      child: new St.Icon({
+        icon_name: "window-close-symbolic",
+        icon_size: 14,
+      }),
+      x_align: Clutter.ActorAlign.END,
+      y_align: Clutter.ActorAlign.END,
     });
-    this._addTooltip(btn, name);
-    return btn;
+    badge.translation_x = 9;
+    badge.translation_y = 11;
+    badge.connect("clicked", () => this._closeOrKillApp(app));
+    wrap.add_child(badge);
+    return wrap;
   }
 
-  _openAppMenu(app, anchor) {
-    const menu = this._appMenu;
-    if (!menu) return;
-    this._hideTooltip();
-    menu.destroy_all_children();
+  _closeOrKillApp(app) {
     const pid = this._appPid(app);
-    const armed =
-      pid > 1 &&
-      this._killArm?.id === app.get_id() &&
-      GLib.get_monotonic_time() <= this._killArm.until;
-    const item = (label, danger, fn) => {
-      const b = new St.Button({
-        label,
-        style_class: "dn-menu-item" + (danger ? " dn-menu-danger" : ""),
-      });
-      b.connect("clicked", fn);
-      menu.add_child(b);
-    };
-    item("Activate", false, () => {
-      this._closeAppMenu();
-      try {
-        app.activate();
-      } catch (e) {
-        logError(e, "dynamic-notch: app activation failed");
-      }
-    });
-    item("Close", false, () => {
-      this._closeAppMenu();
-      this._closeApp(app);
-    });
     if (pid > 1) {
-      item(armed ? "Confirm Force Kill" : "Force Kill…", armed, () => {
-        if (armed) {
-          this._closeAppMenu();
-          this._killApp(app, pid);
-        } else {
-          this._killApp(app, pid);
-          this._openAppMenu(app, anchor);
-        }
-      });
+      this._killApp(app, pid);
+      return;
     }
-    const [ax, ay] = anchor.get_transformed_position();
-    const [nx, ny] = this._notch.get_transformed_position();
-    menu.show();
-    const [, mh] = menu.get_preferred_height(-1);
-    menu.set_position(
-      Math.max(2, Math.round(ax - nx)),
-      Math.max(2, Math.round(ay - ny - mh - 6)),
-    );
+    if (app.get_windows().length > 0) {
+      this._closeApp(app);
+      return;
+    }
+    // Background app: quit over D-Bus, else stop its systemd
+    // scope, else resolve the PID from its bus name and kill it.
+    let quit = false;
+    try {
+      quit = app.request_quit();
+    } catch (_e) {}
+    if (!quit && !this._stopAppScope(app)) this._killBackgroundApp(app);
   }
 
-  _closeAppMenu() {
-    if (this._appMenu) this._appMenu.hide();
+  _stopAppScope(app) {
+    const units =
+      this._appUnits?.get(app.get_id()) ?? this._scopeApps?.get(app.get_id());
+    if (!units?.length) return false;
+    for (const unit of units) {
+      Gio.DBus.session.call(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "StopUnit",
+        new GLib.Variant("(ss)", [unit, "replace"]),
+        null,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        (conn, res) => {
+          try {
+            conn.call_finish(res);
+          } catch (e) {
+            logError(e, "dynamic-notch: stopping app scope failed");
+          }
+          this._scheduleAppsRefresh();
+        },
+      );
+    }
+    return true;
+  }
+
+  _killBackgroundApp(app) {
+    if (!app.get_app_info()) return; // no desktop id → no bus name to resolve a PID from
+    const busName = app.get_id().replace(/\.desktop$/, "");
+    Gio.DBus.session.call(
+      "org.freedesktop.DBus",
+      "/org/freedesktop/DBus",
+      "org.freedesktop.DBus",
+      "GetConnectionUnixProcessID",
+      new GLib.Variant("(s)", [busName]),
+      null,
+      Gio.DBusCallFlags.NONE,
+      -1,
+      null,
+      (conn, res) => {
+        try {
+          const pid = conn.call_finish(res).get_child_value(0).get_uint32();
+          if (pid > 1) this._killApp(app, pid);
+        } catch (e) {
+          logError(e, "dynamic-notch: background app PID lookup failed");
+        }
+      },
+    );
   }
 
   _appPid(app) {
@@ -1292,29 +1523,6 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   _killApp(app, pid) {
-    const now = GLib.get_monotonic_time();
-    if (this._killArm?.id !== app.get_id() || now > this._killArm.until) {
-      // First click only arms the action; it expires after three seconds.
-      this._killArm = { id: app.get_id(), until: now + 3e6 };
-      if (this._killArmTimeoutId) GLib.source_remove(this._killArmTimeoutId);
-      this._killArmTimeoutId = GLib.timeout_add(
-        GLib.PRIORITY_DEFAULT,
-        3100,
-        () => {
-          this._killArmTimeoutId = 0;
-          this._killArm = null;
-          this._refreshApps();
-          return GLib.SOURCE_REMOVE;
-        },
-      );
-      this._refreshApps();
-      return;
-    }
-    this._killArm = null;
-    if (this._killArmTimeoutId) {
-      GLib.source_remove(this._killArmTimeoutId);
-      this._killArmTimeoutId = 0;
-    }
     if (app.get_id() === "org.gnome.Shell.desktop" || pid <= 1) {
       this._refreshApps();
       return;
@@ -1489,13 +1697,21 @@ export default class DynamicNotchExtension extends Extension {
     });
     box.add_child(this._notifEmpty);
 
-    // Plain box, capped at MAX_NOTIF_ITEMS rows — deliberately no
-    // ScrollView, so no scrollbar can ever appear mid-animation.
+    // The list scrolls inside its own viewport: however many
+    // notifications pile up, the apps strip below stays put.
     this._notifList = new St.BoxLayout({
       style_class: "dn-notif-list",
       orientation: Clutter.Orientation.VERTICAL,
     });
-    box.add_child(this._notifList);
+    this._notifScroll = new St.ScrollView({
+      style_class: "dn-notif-scroll",
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      overlay_scrollbars: true,
+      y_expand: true,
+    });
+    this._notifScroll.add_child(this._notifList);
+    box.add_child(this._notifScroll);
     return box;
   }
 
@@ -1705,7 +1921,6 @@ export default class DynamicNotchExtension extends Extension {
     this._state = State.COLLAPSING;
     const gen = ++this._animGen;
 
-    this._closeAppMenu();
     this._hideTooltip();
     // Outside handlers are only needed while fully open / opening.
     this._removeOutsideHandlers();
@@ -1929,25 +2144,38 @@ export default class DynamicNotchExtension extends Extension {
     return [Math.min(PEEK_W, Math.max(280, monitor.width - 16)), PEEK_H];
   }
 
+  _eventDims(monitor) {
+    const h = this._settings.get_int("notch-height");
+    const nat = this._eventNaturalW > 0 ? this._eventNaturalW + 12 : 0;
+    const W = Math.min(
+      Math.max(this._settings.get_int("notch-width"), nat),
+      Math.max(200, monitor.width - 16),
+    );
+    return [W, Math.max(h + 12, 46)];
+  }
+
   // Anchor for the wide modes (expanded / peek): same edge the pill
   // lives on, never swapped — the content is always landscape.
   _anchorFor(style, position, monitor, W, H) {
-    if (style === 0 || position === 0)
-      return [
-        Math.round(monitor.x + (monitor.width - W) / 2),
-        style === 0 ? monitor.y : monitor.y + 6,
-      ];
-    if (position === 1)
-      return [
-        Math.round(monitor.x + (monitor.width - W) / 2),
-        monitor.y + monitor.height - H - 6,
-      ];
-    if (position === 2)
-      return [monitor.x + 6, Math.round(monitor.y + (monitor.height - H) / 2)];
-    return [
-      monitor.x + monitor.width - W - 6,
-      Math.round(monitor.y + (monitor.height - H) / 2),
-    ];
+    let x, y;
+    if (style === 0 || position === 0) {
+      x = Math.round(monitor.x + (monitor.width - W) / 2);
+      y = style === 0 ? monitor.y : monitor.y + 6;
+    } else if (position === 1) {
+      x = Math.round(monitor.x + (monitor.width - W) / 2);
+      y = monitor.y + monitor.height - H - 6;
+    } else if (position === 2) {
+      x = monitor.x + 6;
+      y = Math.round(monitor.y + (monitor.height - H) / 2);
+    } else {
+      x = monitor.x + monitor.width - W - 6;
+      y = Math.round(monitor.y + (monitor.height - H) / 2);
+    }
+    // notch-margin-top: extra vertical offset; negative pushes the
+    // notch past its screen edge, positive moves it inward/down.
+    const margin = this._settings.get_int("notch-margin-top");
+    y += position === 1 ? -margin : margin;
+    return [x, y];
   }
 
   _syncViews() {
@@ -1958,7 +2186,9 @@ export default class DynamicNotchExtension extends Extension {
       this._state === State.COLLAPSING;
     this._expandedView.visible = open;
     this._peekView.visible = !open && this._peekActive;
-    this._clockWidget.visible = !open && !this._peekActive;
+    this._eventView.visible = !open && !this._peekActive && this._eventActive;
+    this._clockWidget.visible =
+      !open && !this._peekActive && !this._eventActive;
   }
 
   _applySize(animate = true) {
@@ -1974,6 +2204,8 @@ export default class DynamicNotchExtension extends Extension {
     const h = this._settings.get_int("notch-height");
     const expanded = this._targetExpanded();
     const peek = !expanded && this._peekActive && this._state === State.COMPACT;
+    const evt =
+      !expanded && !peek && this._eventActive && this._state === State.COMPACT;
 
     // Collapsed pill (not apple): configured width, raised to
     // the children's natural size when the content needs more.
@@ -1996,6 +2228,10 @@ export default class DynamicNotchExtension extends Extension {
       this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
     } else if (peek) {
       [notchW, notchH] = this._peekDims(monitor);
+      [x, y] = this._anchorFor(styleKey, position, monitor, notchW, notchH);
+      this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
+    } else if (evt) {
+      [notchW, notchH] = this._eventDims(monitor);
       [x, y] = this._anchorFor(styleKey, position, monitor, notchW, notchH);
       this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
     } else {
@@ -2035,7 +2271,9 @@ export default class DynamicNotchExtension extends Extension {
     this._expandedView.set_size(expW, expH);
     const [pkW, pkH] = this._peekDims(monitor);
     this._peekView.set_size(pkW, pkH);
-    if (!expanded && !peek) this._clockWidget.set_size(notchW, notchH);
+    const [evW, evH] = this._eventDims(monitor);
+    this._eventView.set_size(evW, evH);
+    if (!expanded && !peek && !evt) this._clockWidget.set_size(notchW, notchH);
 
     // Fillets flare the Apple notch's TOP corners into the
     // screen's top edge (the junction in the reference).
@@ -2244,6 +2482,17 @@ export default class DynamicNotchExtension extends Extension {
       this._calAvailable = false;
     }
 
+    // System events (charger, bluetooth, volume, network, ...).
+    try {
+      this._eventsProvider = new SystemEventsProvider({
+        onEvent: (e) => this._showEvent(e),
+      });
+      this._eventsProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: system events unavailable");
+      this._eventsProvider = null;
+    }
+
     // Do Not Disturb quick action (desktop notifications schema).
     try {
       this._desktopNotifSettings = new Gio.Settings({
@@ -2312,6 +2561,7 @@ export default class DynamicNotchExtension extends Extension {
       return;
     this._peekKind = kind;
     if (kind !== "notification") this._peekNotification = null;
+    this._cancelEvent();
     this._peekActive = true;
     // Arm the timeout in every state so a queued peek cannot get stuck.
     if (this._peekTimeoutId) GLib.source_remove(this._peekTimeoutId);
@@ -2363,6 +2613,85 @@ export default class DynamicNotchExtension extends Extension {
       });
     } else {
       this._peekView.opacity = 0;
+    }
+    this._animOnDone = () => {
+      this._syncViews();
+      if (this._animationsEnabled()) this._fadeInCompact();
+    };
+    this._applySize(true);
+  }
+
+  // ------------------------------------------------------ system events
+
+  _cancelEvent() {
+    if (this._eventTimeoutId) {
+      GLib.source_remove(this._eventTimeoutId);
+      this._eventTimeoutId = 0;
+    }
+    this._eventActive = false;
+  }
+
+  _showEvent({ iconName = null, gicon = null, text = "" }) {
+    // Peeks (notification / timer) win; the expanded panel shows all.
+    if (
+      this._peekActive ||
+      this._state === State.EXPANDED ||
+      this._state === State.EXPANDING
+    )
+      return;
+    if (gicon) {
+      this._eventIcon.gicon = gicon;
+      this._eventIcon.visible = true;
+    } else if (iconName) {
+      this._eventIcon.gicon = null;
+      this._eventIcon.icon_name = iconName;
+      this._eventIcon.visible = true;
+    } else {
+      this._eventIcon.visible = false;
+    }
+    this._eventLabel.text = text;
+    const [, natW] = this._eventView.get_preferred_width(-1);
+    this._eventNaturalW = natW;
+    this._eventActive = true;
+    if (this._eventTimeoutId) GLib.source_remove(this._eventTimeoutId);
+    this._eventTimeoutId = GLib.timeout_add(
+      GLib.PRIORITY_DEFAULT,
+      EVENT_MS,
+      () => {
+        this._eventTimeoutId = 0;
+        this._hideEvent();
+        return GLib.SOURCE_REMOVE;
+      },
+    );
+    this._eventView.remove_all_transitions();
+    if (this._animationsEnabled() && this._state === State.COMPACT) {
+      this._eventView.opacity = 0;
+      this._eventView.ease({
+        opacity: 255,
+        duration: Math.round(ANIM_MS * 0.7),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._eventView.opacity = 255;
+    }
+    if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the event
+    this._syncViews();
+    this._applySize(true);
+  }
+
+  _hideEvent() {
+    const was = this._eventActive;
+    this._cancelEvent();
+    if (!was || this._state !== State.COMPACT) return;
+    this._eventView.remove_all_transitions();
+    if (this._animationsEnabled()) {
+      this._eventView.ease({
+        opacity: 0,
+        duration: Math.round(ANIM_MS * 0.45),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._eventView.opacity = 0;
     }
     this._animOnDone = () => {
       this._syncViews();
@@ -2492,16 +2821,7 @@ export default class DynamicNotchExtension extends Extension {
     this._notifEmpty.text = this._notifAvailable
       ? "No notifications"
       : "Notifications unavailable";
-    for (const n of all.slice(0, MAX_NOTIF_ITEMS))
-      this._notifList.add_child(this._makeNotifItem(n));
-    if (all.length > MAX_NOTIF_ITEMS) {
-      this._notifList.add_child(
-        new St.Label({
-          text: `+${all.length - MAX_NOTIF_ITEMS} more…`,
-          style_class: "dn-card-body",
-        }),
-      );
-    }
+    for (const n of all) this._notifList.add_child(this._makeNotifItem(n));
     this._syncQaStates();
   }
 
@@ -2511,7 +2831,7 @@ export default class DynamicNotchExtension extends Extension {
       style_class: "dn-notif-item",
       x_expand: true,
     });
-    button.x_align = Clutter.ActorAlign.START;
+    button.x_align = Clutter.ActorAlign.FILL;
     const row = new St.BoxLayout({
       style_class: "dn-notif-row",
       x_expand: true,
@@ -2600,6 +2920,36 @@ export default class DynamicNotchExtension extends Extension {
     );
   }
 
+  // The user's accent color with an alpha; GNOME blue on bad input.
+  _accentWithAlpha(alpha) {
+    const m = /(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(
+      this._settings?.get_string("accent-color") ?? "",
+    );
+    const [r, g, b] = m ? m.slice(1, 4) : [53, 132, 228];
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  _applyAccent() {
+    this._renderCalendar();
+    for (const [id, b] of this._tabButtons ?? []) {
+      b.set_style(
+        id === (this._page ?? "main")
+          ? `background-color: ${this._accentWithAlpha(0.32)};`
+          : "",
+      );
+    }
+    for (const f of [this._timerProgressFill, this._tabProgressFill])
+      f?.set_style(this._progressStyle());
+  }
+
+  // Timer progress fills wear the accent color at full strength.
+  _progressStyle() {
+    return (
+      `background-color: ${this._accentWithAlpha(1)};` +
+      " border-radius: 999px;"
+    );
+  }
+
   _renderCalendar() {
     if (!this._calTitle || !this._calCursor) return;
     const cursor = this._calFirstOfMonth(this._calCursor);
@@ -2625,9 +2975,11 @@ export default class DynamicNotchExtension extends Extension {
       cell.label.text = `${d.get_day_of_month()}`;
       let cls = "dn-cal-cell";
       if (d.get_month() !== cursor.get_month()) cls += " dn-cal-dim";
-      if (this._sameDay(d, now)) cls += " dn-cal-today";
-      if (this._calSelected && this._sameDay(d, this._calSelected))
-        cls += " dn-cal-selected";
+      const isToday = this._sameDay(d, now);
+      const isSelected =
+        this._calSelected && this._sameDay(d, this._calSelected);
+      if (isToday) cls += " dn-cal-today";
+      if (isSelected) cls += " dn-cal-selected";
       if (this._calProvider) {
         try {
           if (
@@ -2639,6 +2991,13 @@ export default class DynamicNotchExtension extends Extension {
         } catch (_e) {}
       }
       cell.button.style_class = cls;
+      // Today/selected wear the accent color; the inline style
+      // overrides the stylesheet's stock blue.
+      let style = "";
+      if (isToday) style += `background-color: ${this._accentWithAlpha(0.45)};`;
+      if (isSelected)
+        style += ` border: 1px solid ${this._accentWithAlpha(1)};`;
+      cell.button.set_style(style);
     }
     this._renderCalEvents();
   }

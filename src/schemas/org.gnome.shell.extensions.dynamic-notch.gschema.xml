@@ -42,7 +42,7 @@
       <summary>Notch width in pixels</summary>
     </key>
     <key name="notch-height" type="i">
-      <range min="30" max="100"/>
+      <range min="18" max="100"/>
       <default>34</default>
       <summary>Notch height in pixels</summary>
     </key>
@@ -51,9 +51,18 @@
       <default>18</default>
       <summary>Notch corner radius in pixels</summary>
     </key>
+    <key name="notch-margin-top" type="i">
+      <range min="-40" max="80"/>
+      <default>0</default>
+      <summary>Vertical offset in pixels, added to the notch position: negative pushes it up past the screen edge, positive moves it down</summary>
+    </key>
     <key name="notch-bg" type="s">
       <default>'rgb(0,0,0)'</default>
       <summary>Notch background color (CSS color string)</summary>
+    </key>
+    <key name="accent-color" type="s">
+      <default>'rgb(53,132,228)'</default>
+      <summary>Accent color for highlights (today, active tab)</summary>
     </key>
     <key name="transparent-panel" type="b">
       <default>false</default>
