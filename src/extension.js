@@ -15,6 +15,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 
 import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
+import { SystemEventsProvider } from "./lib/event.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
@@ -24,6 +25,7 @@ const ANIM_MS = 260;
 const PANEL_DEBOUNCE_MS = 100;
 const NOTIF_PEEK_MS = 4500;
 const TIMER_PEEK_MS = 6000;
+const EVENT_MS = 2800;
 const MAX_NOTIF_ITEMS = 5;
 const MAX_APPS = 12;
 const FILLET_R = 10;
@@ -124,11 +126,17 @@ export default class DynamicNotchExtension extends Extension {
     this._peekActive = false;
     this._peekTimeoutId = 0;
 
+    // System event display (transient, centered icon + text)
+    this._eventActive = false;
+    this._eventTimeoutId = 0;
+    this._eventNaturalW = 0;
+
     // Providers (created in _initProviders, failure-isolated)
     this._notifProvider = null;
     this._notifAvailable = false;
     this._calProvider = null;
     this._calAvailable = false;
+    this._eventsProvider = null;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -144,6 +152,8 @@ export default class DynamicNotchExtension extends Extension {
     this._windowCreatedId = 0;
     this._appsDebounceId = 0;
     this._appsWindowIds = new Map();
+    this._actorSignalIds = new Map();
+    this._windowSignalIds = new Map();
     this._killArm = null;
     this._killArmTimeoutId = 0;
 
@@ -219,9 +229,6 @@ export default class DynamicNotchExtension extends Extension {
     );
 
     // --- Panel background tracking ---
-    this._actorSignalIds = new Map();
-    this._windowSignalIds = new Map();
-
     this._actorSignalIds.set(Main.overview, [
       Main.overview.connect("showing", () => {
         // Opening the Overview counts as interacting outside the
@@ -290,6 +297,8 @@ export default class DynamicNotchExtension extends Extension {
     this._closeIdleId = 0;
     if (this._peekTimeoutId) GLib.source_remove(this._peekTimeoutId);
     this._peekTimeoutId = 0;
+    if (this._eventTimeoutId) GLib.source_remove(this._eventTimeoutId);
+    this._eventTimeoutId = 0;
     if (this._timerTimeoutId) GLib.source_remove(this._timerTimeoutId);
     this._timerTimeoutId = 0;
     if (this._timerFinishTimeoutId)
@@ -312,6 +321,12 @@ export default class DynamicNotchExtension extends Extension {
         this._calProvider.destroy();
       } catch (_e) {}
       this._calProvider = null;
+    }
+    if (this._eventsProvider) {
+      try {
+        this._eventsProvider.destroy();
+      } catch (_e) {}
+      this._eventsProvider = null;
     }
     for (const proc of this._scriptProcs ?? []) {
       try {
@@ -424,6 +439,8 @@ export default class DynamicNotchExtension extends Extension {
     this._peekTitle?.destroy();
     this._peekBody?.destroy();
     this._peekCloseBtn?.destroy();
+    this._eventIcon?.destroy();
+    this._eventLabel?.destroy();
     this._clockTime?.destroy();
     this._timerChipLabel?.destroy();
     this._timerProgressFill?.destroy();
@@ -447,6 +464,7 @@ export default class DynamicNotchExtension extends Extension {
     this._btnPlayPause?.destroy();
     this._btnReset?.destroy();
     this._peekView?.destroy();
+    this._eventView?.destroy();
     this._notifList?.destroy();
     this._appsRow?.destroy();
     this._tabBar?.destroy();
@@ -464,6 +482,9 @@ export default class DynamicNotchExtension extends Extension {
     this._peekBody = null;
     this._peekCloseBtn = null;
     this._peekView = null;
+    this._eventIcon = null;
+    this._eventLabel = null;
+    this._eventView = null;
     this._clockTime = null;
     this._clockWidget = null;
     this._timerChip = null;
@@ -688,6 +709,27 @@ export default class DynamicNotchExtension extends Extension {
       },
     );
     this._clipper.add_child(this._peekView);
+
+    // --- Event view: system events, centered icon + text ---
+    this._eventView = new St.BoxLayout({
+      style_class: "dn-event",
+      visible: false,
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventIcon = new St.Icon({
+      icon_name: "dialog-information-symbolic",
+      icon_size: 18,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventView.add_child(this._eventIcon);
+    this._eventLabel = new St.Label({
+      style_class: "dn-event-label",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._eventLabel.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    this._eventView.add_child(this._eventLabel);
+    this._clipper.add_child(this._eventView);
 
     // --- Expanded view: one fixed layout ---
     this._expandedView = new St.Widget({
@@ -1025,6 +1067,7 @@ export default class DynamicNotchExtension extends Extension {
       this._showTooltip(actor, text),
     );
     const leaveId = actor.connect("leave-event", () => this._hideTooltip());
+    if (!this._actorSignalIds) this._actorSignalIds = new Map();
     const ids = this._actorSignalIds.get(actor) ?? [];
     ids.push(enterId, leaveId);
     this._actorSignalIds.set(actor, ids);
@@ -1929,25 +1972,38 @@ export default class DynamicNotchExtension extends Extension {
     return [Math.min(PEEK_W, Math.max(280, monitor.width - 16)), PEEK_H];
   }
 
+  _eventDims(monitor) {
+    const h = this._settings.get_int("notch-height");
+    const nat = this._eventNaturalW > 0 ? this._eventNaturalW + 12 : 0;
+    const W = Math.min(
+      Math.max(this._settings.get_int("notch-width"), nat),
+      Math.max(200, monitor.width - 16),
+    );
+    return [W, Math.max(h + 12, 46)];
+  }
+
   // Anchor for the wide modes (expanded / peek): same edge the pill
   // lives on, never swapped — the content is always landscape.
   _anchorFor(style, position, monitor, W, H) {
-    if (style === 0 || position === 0)
-      return [
-        Math.round(monitor.x + (monitor.width - W) / 2),
-        style === 0 ? monitor.y : monitor.y + 6,
-      ];
-    if (position === 1)
-      return [
-        Math.round(monitor.x + (monitor.width - W) / 2),
-        monitor.y + monitor.height - H - 6,
-      ];
-    if (position === 2)
-      return [monitor.x + 6, Math.round(monitor.y + (monitor.height - H) / 2)];
-    return [
-      monitor.x + monitor.width - W - 6,
-      Math.round(monitor.y + (monitor.height - H) / 2),
-    ];
+    let x, y;
+    if (style === 0 || position === 0) {
+      x = Math.round(monitor.x + (monitor.width - W) / 2);
+      y = style === 0 ? monitor.y : monitor.y + 6;
+    } else if (position === 1) {
+      x = Math.round(monitor.x + (monitor.width - W) / 2);
+      y = monitor.y + monitor.height - H - 6;
+    } else if (position === 2) {
+      x = monitor.x + 6;
+      y = Math.round(monitor.y + (monitor.height - H) / 2);
+    } else {
+      x = monitor.x + monitor.width - W - 6;
+      y = Math.round(monitor.y + (monitor.height - H) / 2);
+    }
+    // notch-margin-top: extra vertical offset; negative pushes the
+    // notch past its screen edge, positive moves it inward/down.
+    const margin = this._settings.get_int("notch-margin-top");
+    y += position === 1 ? -margin : margin;
+    return [x, y];
   }
 
   _syncViews() {
@@ -1958,7 +2014,9 @@ export default class DynamicNotchExtension extends Extension {
       this._state === State.COLLAPSING;
     this._expandedView.visible = open;
     this._peekView.visible = !open && this._peekActive;
-    this._clockWidget.visible = !open && !this._peekActive;
+    this._eventView.visible = !open && !this._peekActive && this._eventActive;
+    this._clockWidget.visible =
+      !open && !this._peekActive && !this._eventActive;
   }
 
   _applySize(animate = true) {
@@ -1974,6 +2032,8 @@ export default class DynamicNotchExtension extends Extension {
     const h = this._settings.get_int("notch-height");
     const expanded = this._targetExpanded();
     const peek = !expanded && this._peekActive && this._state === State.COMPACT;
+    const evt =
+      !expanded && !peek && this._eventActive && this._state === State.COMPACT;
 
     // Collapsed pill (not apple): configured width, raised to
     // the children's natural size when the content needs more.
@@ -1996,6 +2056,10 @@ export default class DynamicNotchExtension extends Extension {
       this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
     } else if (peek) {
       [notchW, notchH] = this._peekDims(monitor);
+      [x, y] = this._anchorFor(styleKey, position, monitor, notchW, notchH);
+      this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
+    } else if (evt) {
+      [notchW, notchH] = this._eventDims(monitor);
       [x, y] = this._anchorFor(styleKey, position, monitor, notchW, notchH);
       this._clockWidget.orientation = Clutter.Orientation.HORIZONTAL;
     } else {
@@ -2035,7 +2099,9 @@ export default class DynamicNotchExtension extends Extension {
     this._expandedView.set_size(expW, expH);
     const [pkW, pkH] = this._peekDims(monitor);
     this._peekView.set_size(pkW, pkH);
-    if (!expanded && !peek) this._clockWidget.set_size(notchW, notchH);
+    const [evW, evH] = this._eventDims(monitor);
+    this._eventView.set_size(evW, evH);
+    if (!expanded && !peek && !evt) this._clockWidget.set_size(notchW, notchH);
 
     // Fillets flare the Apple notch's TOP corners into the
     // screen's top edge (the junction in the reference).
@@ -2244,6 +2310,17 @@ export default class DynamicNotchExtension extends Extension {
       this._calAvailable = false;
     }
 
+    // System events (charger, bluetooth, volume, network, ...).
+    try {
+      this._eventsProvider = new SystemEventsProvider({
+        onEvent: (e) => this._showEvent(e),
+      });
+      this._eventsProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: system events unavailable");
+      this._eventsProvider = null;
+    }
+
     // Do Not Disturb quick action (desktop notifications schema).
     try {
       this._desktopNotifSettings = new Gio.Settings({
@@ -2312,6 +2389,7 @@ export default class DynamicNotchExtension extends Extension {
       return;
     this._peekKind = kind;
     if (kind !== "notification") this._peekNotification = null;
+    this._cancelEvent();
     this._peekActive = true;
     // Arm the timeout in every state so a queued peek cannot get stuck.
     if (this._peekTimeoutId) GLib.source_remove(this._peekTimeoutId);
@@ -2363,6 +2441,85 @@ export default class DynamicNotchExtension extends Extension {
       });
     } else {
       this._peekView.opacity = 0;
+    }
+    this._animOnDone = () => {
+      this._syncViews();
+      if (this._animationsEnabled()) this._fadeInCompact();
+    };
+    this._applySize(true);
+  }
+
+  // ------------------------------------------------------ system events
+
+  _cancelEvent() {
+    if (this._eventTimeoutId) {
+      GLib.source_remove(this._eventTimeoutId);
+      this._eventTimeoutId = 0;
+    }
+    this._eventActive = false;
+  }
+
+  _showEvent({ iconName = null, gicon = null, text = "" }) {
+    // Peeks (notification / timer) win; the expanded panel shows all.
+    if (
+      this._peekActive ||
+      this._state === State.EXPANDED ||
+      this._state === State.EXPANDING
+    )
+      return;
+    if (gicon) {
+      this._eventIcon.gicon = gicon;
+      this._eventIcon.visible = true;
+    } else if (iconName) {
+      this._eventIcon.gicon = null;
+      this._eventIcon.icon_name = iconName;
+      this._eventIcon.visible = true;
+    } else {
+      this._eventIcon.visible = false;
+    }
+    this._eventLabel.text = text;
+    const [, natW] = this._eventView.get_preferred_width(-1);
+    this._eventNaturalW = natW;
+    this._eventActive = true;
+    if (this._eventTimeoutId) GLib.source_remove(this._eventTimeoutId);
+    this._eventTimeoutId = GLib.timeout_add(
+      GLib.PRIORITY_DEFAULT,
+      EVENT_MS,
+      () => {
+        this._eventTimeoutId = 0;
+        this._hideEvent();
+        return GLib.SOURCE_REMOVE;
+      },
+    );
+    this._eventView.remove_all_transitions();
+    if (this._animationsEnabled() && this._state === State.COMPACT) {
+      this._eventView.opacity = 0;
+      this._eventView.ease({
+        opacity: 255,
+        duration: Math.round(ANIM_MS * 0.7),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._eventView.opacity = 255;
+    }
+    if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the event
+    this._syncViews();
+    this._applySize(true);
+  }
+
+  _hideEvent() {
+    const was = this._eventActive;
+    this._cancelEvent();
+    if (!was || this._state !== State.COMPACT) return;
+    this._eventView.remove_all_transitions();
+    if (this._animationsEnabled()) {
+      this._eventView.ease({
+        opacity: 0,
+        duration: Math.round(ANIM_MS * 0.45),
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else {
+      this._eventView.opacity = 0;
     }
     this._animOnDone = () => {
       this._syncViews();
