@@ -27,6 +27,11 @@
     <value nick="light" value="1"/>
     <value nick="dark" value="2"/>
   </enum>
+  <enum id="org.gnome.shell.extensions.dynamic-notch.TabDisplay">
+    <value nick="text" value="0"/>
+    <value nick="icon" value="1"/>
+    <value nick="both" value="2"/>
+  </enum>
   <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
     <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
       <default>'apple'</default>
@@ -63,6 +68,10 @@
     <key name="accent-color" type="s">
       <default>'rgb(53,132,228)'</default>
       <summary>Accent color for highlights (today, active tab)</summary>
+    </key>
+    <key name="tabs-display" enum="org.gnome.shell.extensions.dynamic-notch.TabDisplay">
+      <default>'text'</default>
+      <summary>Tab bar buttons: text only, icons only, or text and icons</summary>
     </key>
     <key name="transparent-panel" type="b">
       <default>false</default>
@@ -114,3 +123,4 @@
     </key>
   </schema>
 </schemalist>
+  

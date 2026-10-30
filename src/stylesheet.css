@@ -178,6 +178,10 @@
   padding-left: 10px;
 }
 
+.dn-tab-content {
+  spacing: 5px;
+}
+
 .dn-tab {
   border-radius: 999px;
   padding: 4px 12px;

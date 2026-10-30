@@ -178,6 +178,13 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
         "a shell). Row order sets the icon order.",
     });
     page.add(qaGroup);
+    qaGroup.add(
+      enumRow("Tab Buttons", "tabs-display", [
+        "Text only",
+        "Icons only",
+        "Text and Icons",
+      ]),
+    );
     const tbRows = [];
     const tbRead = () => {
       const out = [];

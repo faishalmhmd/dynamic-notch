@@ -225,6 +225,7 @@ export default class DynamicNotchExtension extends Extension {
       this._updatePanelAppearance();
       if (key === "topbar-icons") this._buildQaButtons();
       if (key === "accent-color") this._applyAccent();
+      if (key === "tabs-display") this._applyTabDisplay();
     });
     this._monitorsChangedId = Main.layoutManager.connect(
       "monitors-changed",
@@ -459,6 +460,8 @@ export default class DynamicNotchExtension extends Extension {
     for (const btn of this._tabButtons?.values() ?? []) btn?.destroy();
     this._tabButtons?.clear();
     this._tabButtons = null;
+    this._tabParts?.clear();
+    this._tabParts = null;
     this._peekIcon?.destroy();
     this._peekTitle?.destroy();
     this._peekBody?.destroy();
@@ -811,16 +814,35 @@ export default class DynamicNotchExtension extends Extension {
       y_align: Clutter.ActorAlign.CENTER,
     });
     this._tabButtons = new Map();
-    for (const [id, label] of TAB_DEFS) {
+    this._tabParts = new Map();
+    for (const [id, label, iconName] of TAB_DEFS) {
+      const content = new St.BoxLayout({
+        style_class: "dn-tab-content",
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      const icon = new St.Icon({
+        icon_name: iconName,
+        icon_size: 14,
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      const text = new St.Label({
+        text: label,
+        style_class: "dn-tab-label",
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      content.add_child(icon);
+      content.add_child(text);
       const b = new St.Button({
-        label,
+        child: content,
         style_class: "dn-tab",
         accessible_name: `${label} tab`,
       });
       b.connect("clicked", () => this._setTab(id));
       this._tabButtons.set(id, b);
+      this._tabParts.set(id, { icon, text });
       this._tabBar.add_child(b);
     }
+    this._applyTabDisplay();
     topBar.add_child(this._tabBar);
     this._qaBar = new St.BoxLayout({
       style_class: "dn-qa-row",
@@ -1025,6 +1047,20 @@ export default class DynamicNotchExtension extends Extension {
       } catch (e) {
         logError(e, "dynamic-notch: opening preferences failed");
       }
+    }
+  }
+
+  _applyTabDisplay() {
+    // Guarded: a stale installed schema (no tabs-display key)
+    // degrades to text-only tabs instead of crashing the build.
+    let mode = "text";
+    try {
+      if (this._settings?.settings_schema?.has_key("tabs-display"))
+        mode = this._settings.get_string("tabs-display");
+    } catch (_e) {}
+    for (const parts of this._tabParts?.values() ?? []) {
+      parts.icon.visible = mode !== "text";
+      parts.text.visible = mode !== "icon";
     }
   }
 
@@ -2530,23 +2566,6 @@ export default class DynamicNotchExtension extends Extension {
 
   // -------------------------------------------- providers / integration
 
-  // Copy peek, fired by the clipboard provider after each capture:
-  // rate-limited, and never over another peek.
-  _onClipboardOwnerChanged() {
-    const now = GLib.get_monotonic_time();
-    if (now - this._lastCopyPeekUs < 1200000) return; // one peek per copy action, not per signal burst
-    this._lastCopyPeekUs = now;
-    if (this._peekActive) return; // never clobber a notification / finish peek
-    this._showPeek(
-      {
-        iconName: "edit-copy-symbolic",
-        title: "Text Copied",
-        body: "You copied text to the clipboard",
-      },
-      2500,
-    );
-  }
-
   _initProviders() {
     // Failure-isolated: if the tray API differs, everything else keeps working.
     try {
@@ -2593,12 +2612,10 @@ export default class DynamicNotchExtension extends Extension {
       this._eventsProvider = null;
     }
 
-    // Clipboard history (Tab 3) and the copy peek.
-    this._lastCopyPeekUs = 0;
+    // Clipboard history (Tab 3), captured silently.
     try {
       this._clipProvider = new ClipboardProvider({
         onChanged: () => this._refreshClipList(),
-        onCopy: () => this._onClipboardOwnerChanged(),
       });
       this._clipProvider.start();
     } catch (e) {

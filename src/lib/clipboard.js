@@ -1,4 +1,3 @@
-import GLib from "gi://GLib";
 import Meta from "gi://Meta";
 import St from "gi://St";
 
@@ -14,15 +13,12 @@ const TEXT_MIMES = [
 // In-memory text clipboard history. On Wayland the only copy signal
 // is MetaSelection owner-changed, visible inside the compositor.
 export class ClipboardProvider {
-  constructor({ onChanged, onCopy }) {
+  constructor({ onChanged }) {
     this._onChanged = onChanged ?? (() => {});
-    this._onCopy = onCopy ?? (() => {});
     this._items = [];
     this._selection = null;
     this._ownerChangedId = 0;
     this._clipboard = null;
-    this._restoring = false;
-    this._restoreTimeoutId = 0;
     this._destroyed = false;
   }
 
@@ -37,8 +33,6 @@ export class ClipboardProvider {
 
   destroy() {
     this._destroyed = true;
-    if (this._restoreTimeoutId) GLib.source_remove(this._restoreTimeoutId);
-    this._restoreTimeoutId = 0;
     if (this._selection && this._ownerChangedId)
       this._selection.disconnect(this._ownerChangedId);
     this._ownerChangedId = 0;
@@ -56,23 +50,11 @@ export class ClipboardProvider {
   }
 
   // Put an old item back on the clipboard. The owner change it
-  // causes re-captures it as current, without firing the peek.
+  // causes re-captures it as the current item.
   restore(item) {
-    this._restoring = true;
-    if (this._restoreTimeoutId) GLib.source_remove(this._restoreTimeoutId);
-    this._restoreTimeoutId = GLib.timeout_add(
-      GLib.PRIORITY_DEFAULT,
-      500,
-      () => {
-        this._restoreTimeoutId = 0;
-        this._restoring = false;
-        return GLib.SOURCE_REMOVE;
-      },
-    );
     try {
       this._clipboard?.set_text(St.ClipboardType.CLIPBOARD, item.text);
     } catch (e) {
-      this._restoring = false;
       logError(e, "dynamic-notch: clipboard restore failed");
     }
   }
@@ -95,12 +77,6 @@ export class ClipboardProvider {
 
   _capture(text) {
     if (this._destroyed) return;
-    const restoring = this._restoring;
-    this._restoring = false;
-    if (this._restoreTimeoutId) {
-      GLib.source_remove(this._restoreTimeoutId);
-      this._restoreTimeoutId = 0;
-    }
     if (!text || !text.trim()) return;
     const clipped = text.slice(0, MAX_TEXT);
     const existing = this._items.findIndex((i) => i.text === clipped);
@@ -108,6 +84,5 @@ export class ClipboardProvider {
     this._items.unshift({ text: clipped, time: Date.now() });
     if (this._items.length > MAX_ITEMS) this._items.length = MAX_ITEMS;
     this._onChanged();
-    if (!restoring) this._onCopy();
   }
 }
