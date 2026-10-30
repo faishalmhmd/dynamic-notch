@@ -225,7 +225,7 @@ export default class DynamicNotchExtension extends Extension {
       this._updatePanelAppearance();
       if (key === "topbar-icons") this._buildQaButtons();
       if (key === "accent-color") this._applyAccent();
-      if (key === "tabs-display") this._applyTabDisplay();
+      if (key && key.startsWith("tab-icon-")) this._applyTabIcons();
     });
     this._monitorsChangedId = Main.layoutManager.connect(
       "monitors-changed",
@@ -815,34 +815,23 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._tabButtons = new Map();
     this._tabParts = new Map();
-    for (const [id, label, iconName] of TAB_DEFS) {
-      const content = new St.BoxLayout({
-        style_class: "dn-tab-content",
-        y_align: Clutter.ActorAlign.CENTER,
-      });
+    for (const [id, label, defIcon] of TAB_DEFS) {
       const icon = new St.Icon({
-        icon_name: iconName,
-        icon_size: 14,
+        icon_name: this._tabIcon(id, defIcon),
+        icon_size: 16,
         y_align: Clutter.ActorAlign.CENTER,
       });
-      const text = new St.Label({
-        text: label,
-        style_class: "dn-tab-label",
-        y_align: Clutter.ActorAlign.CENTER,
-      });
-      content.add_child(icon);
-      content.add_child(text);
       const b = new St.Button({
-        child: content,
+        child: icon,
         style_class: "dn-tab",
         accessible_name: `${label} tab`,
       });
       b.connect("clicked", () => this._setTab(id));
+      this._addTooltip(b, label);
       this._tabButtons.set(id, b);
-      this._tabParts.set(id, { icon, text });
+      this._tabParts.set(id, { icon });
       this._tabBar.add_child(b);
     }
-    this._applyTabDisplay();
     topBar.add_child(this._tabBar);
     this._qaBar = new St.BoxLayout({
       style_class: "dn-qa-row",
@@ -1050,17 +1039,15 @@ export default class DynamicNotchExtension extends Extension {
     }
   }
 
-  _applyTabDisplay() {
-    // Guarded: a stale installed schema (no tabs-display key)
-    // degrades to text-only tabs instead of crashing the build.
-    let mode = "text";
-    try {
-      if (this._settings?.settings_schema?.has_key("tabs-display"))
-        mode = this._settings.get_string("tabs-display");
-    } catch (_e) {}
-    for (const parts of this._tabParts?.values() ?? []) {
-      parts.icon.visible = mode !== "text";
-      parts.text.visible = mode !== "icon";
+  _tabIcon(id, defIcon) {
+    const name = this._strSetting(`tab-icon-${id}`, defIcon);
+    return ICON_NAME_RE.test(name) ? name : defIcon;
+  }
+
+  _applyTabIcons() {
+    for (const [id, parts] of this._tabParts ?? []) {
+      const def = TAB_DEFS.find((d) => d[0] === id);
+      if (def) parts.icon.icon_name = this._tabIcon(id, def[2]);
     }
   }
 
@@ -1086,6 +1073,13 @@ export default class DynamicNotchExtension extends Extension {
     if (this._pageMain) this._pageMain.visible = name === "main";
     if (this._pageTimer) this._pageTimer.visible = name === "timer";
     if (this._pageClipboard) this._pageClipboard.visible = name === "clipboard";
+    const page =
+      name === "main"
+        ? this._pageMain
+        : name === "timer"
+          ? this._pageTimer
+          : this._pageClipboard;
+    if (page && this._state === State.EXPANDED) this._animateContentIn(page, 8);
     this._hideTooltip();
     this._syncQaStates();
   }
@@ -2057,6 +2051,7 @@ export default class DynamicNotchExtension extends Extension {
       this._expandedView.opacity = 255;
     }
 
+    this._animateContentIn(this._expandedView, 10);
     this._animOnDone = () => {
       if (gen !== this._animGen) return;
       this._state = State.EXPANDED;
@@ -2234,8 +2229,79 @@ export default class DynamicNotchExtension extends Extension {
 
   // ------------------------------------------------------------ geometry
 
+  // GSettings string read that tolerates a stale installed schema.
+  _strSetting(key, fallback) {
+    try {
+      if (this._settings?.settings_schema?.has_key(key))
+        return this._settings.get_string(key);
+    } catch (_e) {}
+    return fallback;
+  }
+
+  _animStyle() {
+    return this._strSetting("animation-style", "default");
+  }
+
+  // Size transitions spring only in the spring style; other styles
+  // keep the stock cubic and differ in the content animation.
+  _easeMode() {
+    return this._animStyle() === "spring"
+      ? Clutter.AnimationMode.EASE_OUT_BACK
+      : Clutter.AnimationMode.EASE_OUT_CUBIC;
+  }
+
   _animationsEnabled() {
-    return this._ifaceSettings?.get_boolean("enable-animations") ?? true;
+    const system =
+      this._ifaceSettings?.get_boolean("enable-animations") ?? true;
+    return system && this._animStyle() !== "none";
+  }
+
+  // Content entrance per animation style, used on expand and on
+  // tab switches. Geometry keeps the stock ease; styles move the
+  // content only, and 'default' adds nothing.
+  _animateContentIn(actor, shift = 10) {
+    if (!actor || !this._animationsEnabled()) return;
+    const style = this._animStyle();
+    if (style === "default" || style === "none") return;
+    actor.remove_all_transitions();
+    actor.set_pivot_point(0.5, 0);
+    if (style === "fade") {
+      actor.opacity = 0;
+      actor.ease({
+        opacity: 255,
+        duration: 160,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "slide") {
+      actor.translation_y = shift;
+      actor.opacity = 0;
+      actor.ease({
+        translation_y: 0,
+        opacity: 255,
+        duration: 200,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "scale") {
+      actor.scale_x = 0.97;
+      actor.scale_y = 0.97;
+      actor.opacity = 0;
+      actor.ease({
+        scale_x: 1,
+        scale_y: 1,
+        opacity: 255,
+        duration: 200,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "spring") {
+      actor.translation_y = shift + 2;
+      actor.opacity = 0;
+      actor.ease({
+        translation_y: 0,
+        opacity: 255,
+        duration: 280,
+        mode: Clutter.AnimationMode.EASE_OUT_BACK,
+      });
+    }
   }
 
   _refreshGeometry() {
@@ -2453,7 +2519,7 @@ export default class DynamicNotchExtension extends Extension {
         width: notchW,
         height: notchH,
         duration: ANIM_MS,
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+        mode: this._easeMode(),
         onComplete: () => onDone?.(),
       });
       for (const layer of [this._backdrop, this._clipper]) {
@@ -2462,7 +2528,7 @@ export default class DynamicNotchExtension extends Extension {
           width: notchW,
           height: notchH,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
       }
       if (showFillets) {
@@ -2470,13 +2536,13 @@ export default class DynamicNotchExtension extends Extension {
           x: x - FILLET_R,
           y,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
         this._filletR.ease({
           x: x + notchW,
           y,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
       }
     } else {

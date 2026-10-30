@@ -40,6 +40,12 @@ const QA_TITLES = [
   ["settings", "Extension Settings"],
 ];
 
+const TAB_TITLES = [
+  ["main", "Main"],
+  ["timer", "Timer"],
+  ["clipboard", "Clipboard"],
+];
+
 export default class DynamicNotchPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window) {
     const settings = this.getSettings();
@@ -79,6 +85,48 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       settings.connect(`changed::${key}`, () => {
         row.selected = settings.get_enum(key);
       });
+      return row;
+    };
+    // Tab icon picker: name entry with a live theme preview;
+    // only names that exist in the icon theme are saved.
+    const iconRow = (tabId, title, defIcon) => {
+      const key = `tab-icon-${tabId}`;
+      const row = new Adw.ActionRow({ title });
+      const theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default());
+      const preview = new Gtk.Image({
+        valign: Gtk.Align.CENTER,
+        pixel_size: 20,
+      });
+      const entry = new Gtk.Entry({
+        valign: Gtk.Align.CENTER,
+        width_chars: 22,
+        text: settings.get_string(key),
+      });
+      const reset = new Gtk.Button({
+        icon_name: "edit-undo-symbolic",
+        valign: Gtk.Align.CENTER,
+        has_frame: false,
+        tooltip_text: "Reset to default icon",
+      });
+      const apply = () => {
+        const name = entry.text.trim();
+        if (name && theme.has_icon(name)) {
+          preview.icon_name = name;
+          entry.remove_css_class("error");
+          if (settings.get_string(key) !== name) settings.set_string(key, name);
+        } else {
+          preview.icon_name = "image-missing-symbolic";
+          entry.add_css_class("error");
+        }
+      };
+      entry.connect("changed", apply);
+      reset.connect("clicked", () => {
+        entry.text = defIcon;
+      });
+      apply();
+      row.add_suffix(preview);
+      row.add_suffix(entry);
+      row.add_suffix(reset);
       return row;
     };
     // useAlpha stores rgba(); alpha is forced in Solid mode, used as picked in Semi mode.
@@ -161,6 +209,16 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     appearance.add(colorRow("Notch Background Color", "notch-bg", false));
     appearance.add(colorRow("Accent Color", "accent-color", false));
     appearance.add(
+      enumRow("Animation Style", "animation-style", [
+        "Default",
+        "Fade",
+        "Slide",
+        "Scale",
+        "Spring",
+        "None",
+      ]),
+    );
+    appearance.add(
       enumRow("Notch Text", "notch-text-mode", [
         "Auto (from notch color)",
         "Light",
@@ -178,13 +236,15 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
         "a shell). Row order sets the icon order.",
     });
     page.add(qaGroup);
-    qaGroup.add(
-      enumRow("Tab Buttons", "tabs-display", [
-        "Text only",
-        "Icons only",
-        "Text and Icons",
-      ]),
-    );
+    const TAB_ICON_DEFAULTS = [
+      ["main", "x-office-calendar-symbolic"],
+      ["timer", "alarm-symbolic"],
+      ["clipboard", "edit-paste-symbolic"],
+    ];
+    for (const [tabId, defIcon] of TAB_ICON_DEFAULTS) {
+      const title = TAB_TITLES.find(([x]) => x === tabId)?.[1] ?? tabId;
+      qaGroup.add(iconRow(tabId, `${title} Tab Icon`, defIcon));
+    }
     const tbRows = [];
     const tbRead = () => {
       const out = [];
@@ -205,7 +265,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       if (e.mode === "builtin")
         return `Built-in — ${QA_TITLES.find(([x]) => x === e.id)?.[1] ?? e.id}`;
       if (e.mode === "tab")
-        return `Tab — ${e.tab === "timer" ? "Timer" : "Main"}`;
+        return `Tab — ${TAB_TITLES.find(([x]) => x === e.tab)?.[1] ?? e.tab}`;
       return `Script — ${e.path ?? ""}`;
     };
     const rebuildTbRows = () => {
@@ -277,13 +337,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
           });
           row.add_row(pathRow);
         } else {
-          const options =
-            entry.mode === "builtin"
-              ? QA_TITLES
-              : [
-                  ["main", "Main"],
-                  ["timer", "Timer"],
-                ];
+          const options = entry.mode === "builtin" ? QA_TITLES : TAB_TITLES;
           const targetRow = new Adw.ComboRow({
             title: entry.mode === "builtin" ? "Built-in Action" : "Target Tab",
             model: Gtk.StringList.new(options.map(([, t]) => t)),
