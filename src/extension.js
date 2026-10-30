@@ -1417,13 +1417,13 @@ export default class DynamicNotchExtension extends Extension {
       accessible_name: `Close ${name}`,
       child: new St.Icon({
         icon_name: "window-close-symbolic",
-        icon_size: 10,
+        icon_size: 14,
       }),
       x_align: Clutter.ActorAlign.END,
       y_align: Clutter.ActorAlign.END,
     });
-    badge.translation_x = 8;
-    badge.translation_y = 8;
+    badge.translation_x = 9;
+    badge.translation_y = 11;
     badge.connect("clicked", () => this._closeOrKillApp(app));
     wrap.add_child(badge);
     return wrap;
