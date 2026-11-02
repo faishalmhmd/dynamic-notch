@@ -27,6 +27,19 @@
     <value nick="light" value="1"/>
     <value nick="dark" value="2"/>
   </enum>
+  <enum id="org.gnome.shell.extensions.dynamic-notch.TabDisplay">
+    <value nick="text" value="0"/>
+    <value nick="icon" value="1"/>
+    <value nick="both" value="2"/>
+  </enum>
+  <enum id="org.gnome.shell.extensions.dynamic-notch.AnimationStyle">
+    <value nick="default" value="0"/>
+    <value nick="fade" value="1"/>
+    <value nick="slide" value="2"/>
+    <value nick="scale" value="3"/>
+    <value nick="spring" value="4"/>
+    <value nick="none" value="5"/>
+  </enum>
   <schema id="org.gnome.shell.extensions.dynamic-notch" path="/org/gnome/shell/extensions/dynamic-notch/">
     <key name="notch-style" enum="org.gnome.shell.extensions.dynamic-notch.NotchStyle">
       <default>'apple'</default>
@@ -63,6 +76,26 @@
     <key name="accent-color" type="s">
       <default>'rgb(53,132,228)'</default>
       <summary>Accent color for highlights (today, active tab)</summary>
+    </key>
+    <key name="tabs-display" enum="org.gnome.shell.extensions.dynamic-notch.TabDisplay">
+      <default>'text'</default>
+      <summary>Tab bar buttons: text only, icons only, or text and icons</summary>
+    </key>
+    <key name="animation-style" enum="org.gnome.shell.extensions.dynamic-notch.AnimationStyle">
+      <default>'default'</default>
+      <summary>Transition style: default, fade, slide, scale, spring, or none</summary>
+    </key>
+    <key name="tab-icon-main" type="s">
+      <default>'x-office-calendar-symbolic'</default>
+      <summary>Symbolic icon name for the Main tab</summary>
+    </key>
+    <key name="tab-icon-timer" type="s">
+      <default>'alarm-symbolic'</default>
+      <summary>Symbolic icon name for the Timer tab</summary>
+    </key>
+    <key name="tab-icon-clipboard" type="s">
+      <default>'edit-paste-symbolic'</default>
+      <summary>Symbolic icon name for the Clipboard tab</summary>
     </key>
     <key name="transparent-panel" type="b">
       <default>false</default>

@@ -16,6 +16,7 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
 import { SystemEventsProvider } from "./lib/event.js";
+import { ClipboardProvider } from "./lib/clipboard.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
@@ -98,6 +99,7 @@ function formatDateTime(now) {
 const QA_DEFS = [
   ["dnd", "notifications-disabled-symbolic", "Do Not Disturb"],
   ["timer", "alarm-symbolic", "Timer"],
+  ["clipboard", "edit-paste-symbolic", "Clipboard"],
   ["today", "x-office-calendar-symbolic", "Today"],
   ["clear", "edit-clear-symbolic", "Clear Notifications"],
   ["settings", "preferences-system-symbolic", "Extension Settings"],
@@ -106,6 +108,7 @@ const QA_DEFS = [
 const TAB_DEFS = [
   ["main", "Main", "x-office-calendar-symbolic"],
   ["timer", "Timer", "alarm-symbolic"],
+  ["clipboard", "Clipboard", "edit-paste-symbolic"],
 ];
 
 const ICON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_.]*$/;
@@ -136,6 +139,7 @@ export default class DynamicNotchExtension extends Extension {
     this._calProvider = null;
     this._calAvailable = false;
     this._eventsProvider = null;
+    this._clipProvider = null;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -199,9 +203,9 @@ export default class DynamicNotchExtension extends Extension {
     this._monitorsChangedId = 0;
 
     this._buildNotch();
-    Main.layoutManager.addChrome(this._notch);
-    Main.layoutManager.addChrome(this._filletL);
-    Main.layoutManager.addChrome(this._filletR);
+    Main.layoutManager.addChrome(this._notch, { trackFullscreen: true });
+    Main.layoutManager.addChrome(this._filletL, { trackFullscreen: true });
+    Main.layoutManager.addChrome(this._filletR, { trackFullscreen: true });
     this._applyNotchStyle();
     this._applySize(false);
 
@@ -221,6 +225,7 @@ export default class DynamicNotchExtension extends Extension {
       this._updatePanelAppearance();
       if (key === "topbar-icons") this._buildQaButtons();
       if (key === "accent-color") this._applyAccent();
+      if (key && key.startsWith("tab-icon-")) this._applyTabIcons();
     });
     this._monitorsChangedId = Main.layoutManager.connect(
       "monitors-changed",
@@ -229,6 +234,15 @@ export default class DynamicNotchExtension extends Extension {
         this._updatePanelAppearance();
       },
     );
+    // Re-evaluate fillet visibility the moment fullscreen starts
+    // or ends, instead of at the next size pass.
+    this._fullscreenChangedId = 0;
+    try {
+      this._fullscreenChangedId = Main.layoutManager.connect(
+        "primary-fullscreen-changed",
+        () => this._applySize(false),
+      );
+    } catch (_e) {}
 
     // --- Panel background tracking ---
     this._actorSignalIds.set(Main.overview, [
@@ -279,8 +293,8 @@ export default class DynamicNotchExtension extends Extension {
 
     this._updatePanelAppearance();
     this._initProviders();
-    this._initClipboardWatch();
     this._initApps();
+    this._refreshClipList();
     this._renderCalendar();
     this._renderTimer();
     this._syncDndButton();
@@ -327,6 +341,12 @@ export default class DynamicNotchExtension extends Extension {
         this._eventsProvider.destroy();
       } catch (_e) {}
       this._eventsProvider = null;
+    }
+    if (this._clipProvider) {
+      try {
+        this._clipProvider.destroy();
+      } catch (_e) {}
+      this._clipProvider = null;
     }
     for (const proc of this._scriptProcs ?? []) {
       try {
@@ -381,13 +401,6 @@ export default class DynamicNotchExtension extends Extension {
       this._desktopNotifSettings.disconnect(this._dndChangedId);
     this._dndChangedId = 0;
     this._desktopNotifSettings = null;
-    if (this._selection && this._selectionChangedId) {
-      try {
-        this._selection.disconnect(this._selectionChangedId);
-      } catch (_e) {}
-    }
-    this._selectionChangedId = 0;
-    this._selection = null;
 
     // Signals connected on our own actors (ids stored at build time).
     if (this._clockWidget && this._clockPressId)
@@ -422,6 +435,9 @@ export default class DynamicNotchExtension extends Extension {
     if (this._monitorsChangedId)
       Main.layoutManager.disconnect(this._monitorsChangedId);
     this._monitorsChangedId = 0;
+    if (this._fullscreenChangedId)
+      Main.layoutManager.disconnect(this._fullscreenChangedId);
+    this._fullscreenChangedId = 0;
 
     for (const map of [this._actorSignalIds, this._windowSignalIds]) {
       if (!map) continue;
@@ -456,6 +472,8 @@ export default class DynamicNotchExtension extends Extension {
     for (const btn of this._tabButtons?.values() ?? []) btn?.destroy();
     this._tabButtons?.clear();
     this._tabButtons = null;
+    this._tabParts?.clear();
+    this._tabParts = null;
     this._peekIcon?.destroy();
     this._peekTitle?.destroy();
     this._peekBody?.destroy();
@@ -487,6 +505,7 @@ export default class DynamicNotchExtension extends Extension {
     this._peekView?.destroy();
     this._eventView?.destroy();
     this._notifScroll?.destroy();
+    this._clipScroll?.destroy();
     this._notifList?.destroy();
     this._appsRow?.destroy();
     this._tabBar?.destroy();
@@ -494,6 +513,7 @@ export default class DynamicNotchExtension extends Extension {
     this._qaBar?.destroy();
     this._pageMain?.destroy();
     this._pageTimer?.destroy();
+    this._pageClipboard?.destroy();
     this._clockWidget?.destroy();
     this._expandedView?.destroy();
     this._backdrop?.destroy();
@@ -522,6 +542,10 @@ export default class DynamicNotchExtension extends Extension {
     this._clearButton = null;
     this._notifList = null;
     this._notifScroll = null;
+    this._clipList = null;
+    this._clipScroll = null;
+    this._clipEmpty = null;
+    this._clipClearButton = null;
     this._playPauseIcon = null;
     this._playPauseLabel = null;
     this._timerLabel = null;
@@ -537,6 +561,7 @@ export default class DynamicNotchExtension extends Extension {
     this._qaBar = null;
     this._pageMain = null;
     this._pageTimer = null;
+    this._pageClipboard = null;
     this._expandedView = null;
     this._backdrop = null;
     this._clipper = null;
@@ -801,14 +826,22 @@ export default class DynamicNotchExtension extends Extension {
       y_align: Clutter.ActorAlign.CENTER,
     });
     this._tabButtons = new Map();
-    for (const [id, label] of TAB_DEFS) {
+    this._tabParts = new Map();
+    for (const [id, label, defIcon] of TAB_DEFS) {
+      const icon = new St.Icon({
+        icon_name: this._tabIcon(id, defIcon),
+        icon_size: 16,
+        y_align: Clutter.ActorAlign.CENTER,
+      });
       const b = new St.Button({
-        label,
+        child: icon,
         style_class: "dn-tab",
         accessible_name: `${label} tab`,
       });
       b.connect("clicked", () => this._setTab(id));
+      this._addTooltip(b, label);
       this._tabButtons.set(id, b);
+      this._tabParts.set(id, { icon });
       this._tabBar.add_child(b);
     }
     topBar.add_child(this._tabBar);
@@ -865,6 +898,8 @@ export default class DynamicNotchExtension extends Extension {
     this._tabProgressTrack.add_child(this._tabProgressFill);
     this._pageTimer.add_child(this._tabProgressTrack);
     root.add_child(this._pageTimer);
+    this._pageClipboard = this._buildClipboardPage();
+    root.add_child(this._pageClipboard);
     this._setTab("main");
     return root;
   }
@@ -999,6 +1034,8 @@ export default class DynamicNotchExtension extends Extension {
     if (id === "dnd") this._toggleDnd();
     else if (id === "timer")
       this._setTab(this._page === "timer" ? "main" : "timer");
+    else if (id === "clipboard")
+      this._setTab(this._page === "clipboard" ? "main" : "clipboard");
     else if (id === "today") {
       this._setTab("main");
       this._qaCalendarToday();
@@ -1011,6 +1048,18 @@ export default class DynamicNotchExtension extends Extension {
       } catch (e) {
         logError(e, "dynamic-notch: opening preferences failed");
       }
+    }
+  }
+
+  _tabIcon(id, defIcon) {
+    const name = this._strSetting(`tab-icon-${id}`, defIcon);
+    return ICON_NAME_RE.test(name) ? name : defIcon;
+  }
+
+  _applyTabIcons() {
+    for (const [id, parts] of this._tabParts ?? []) {
+      const def = TAB_DEFS.find((d) => d[0] === id);
+      if (def) parts.icon.icon_name = this._tabIcon(id, def[2]);
     }
   }
 
@@ -1035,6 +1084,14 @@ export default class DynamicNotchExtension extends Extension {
     this._page = name;
     if (this._pageMain) this._pageMain.visible = name === "main";
     if (this._pageTimer) this._pageTimer.visible = name === "timer";
+    if (this._pageClipboard) this._pageClipboard.visible = name === "clipboard";
+    const page =
+      name === "main"
+        ? this._pageMain
+        : name === "timer"
+          ? this._pageTimer
+          : this._pageClipboard;
+    if (page && this._state === State.EXPANDED) this._animateContentIn(page, 8);
     this._hideTooltip();
     this._syncQaStates();
   }
@@ -1715,6 +1772,116 @@ export default class DynamicNotchExtension extends Extension {
     return box;
   }
 
+  // --- Tab 3: clipboard history ---
+  _buildClipboardPage() {
+    const page = new St.BoxLayout({
+      style_class: "dn-page-clipboard",
+      orientation: Clutter.Orientation.VERTICAL,
+      y_expand: true,
+      visible: false,
+    });
+    const header = new St.BoxLayout({ style_class: "dn-notif-header" });
+    header.add_child(
+      new St.Icon({
+        icon_name: "edit-paste-symbolic",
+        icon_size: 16,
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    header.add_child(
+      new St.Label({
+        text: "Clipboard History",
+        style_class: "dn-card-title",
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    header.add_child(new St.Widget({ x_expand: true }));
+    this._clipClearButton = new St.Button({
+      label: "Clear history",
+      style_class: "dn-small-button",
+    });
+    this._clipClearButton.connect("clicked", () => {
+      try {
+        this._clipProvider?.clear();
+      } catch (e) {
+        logError(e, "dynamic-notch: clear clipboard history failed");
+      }
+    });
+    header.add_child(this._clipClearButton);
+    page.add_child(header);
+    this._clipEmpty = new St.Label({
+      text: "Nothing copied yet",
+      style_class: "dn-card-body",
+    });
+    page.add_child(this._clipEmpty);
+    this._clipList = new St.BoxLayout({
+      style_class: "dn-notif-list",
+      orientation: Clutter.Orientation.VERTICAL,
+    });
+    const scroll = new St.ScrollView({
+      style_class: "dn-notif-scroll",
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      overlay_scrollbars: true,
+      y_expand: true,
+    });
+    scroll.add_child(this._clipList);
+    this._clipScroll = scroll;
+    page.add_child(scroll);
+    return page;
+  }
+
+  _refreshClipList() {
+    if (!this._clipList) return;
+    this._clipList.destroy_all_children();
+    const items = this._clipProvider?.getAll() ?? [];
+    this._clipEmpty.visible = items.length === 0;
+    if (this._clipClearButton) {
+      this._clipClearButton.reactive = items.length > 0;
+      this._clipClearButton.opacity = items.length > 0 ? 255 : 120;
+    }
+    for (const item of items)
+      this._clipList.add_child(this._makeClipItem(item));
+  }
+
+  _makeClipItem(item) {
+    const button = new St.Button({
+      style_class: "dn-notif-item",
+      x_expand: true,
+    });
+    button.x_align = Clutter.ActorAlign.FILL;
+    const texts = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-notif-texts",
+      x_expand: true,
+    });
+    // One-line preview: whitespace collapses, long text ellipsizes.
+    const preview = new St.Label({
+      text: item.text.replace(/\s+/g, " ").trim(),
+      style_class: "dn-notif-item-title",
+    });
+    preview.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    texts.add_child(preview);
+    texts.add_child(
+      new St.Label({
+        text:
+          `${this._fmtTimeJS(new Date(item.time))} · ` +
+          `${item.text.length} chars`,
+        style_class: "dn-notif-item-sub",
+      }),
+    );
+    button.child = texts;
+    button.connect("clicked", () => {
+      try {
+        this._clipProvider?.restore(item);
+      } catch (e) {
+        logError(e, "dynamic-notch: clipboard restore failed");
+      }
+    });
+    this._addTooltip(button, "Copy back to clipboard");
+    return button;
+  }
+
   // --- Timer strip (bottom, cols 2-5 of row 5) ---
   _buildTimerStrip() {
     const strip = new St.BoxLayout({
@@ -1896,6 +2063,7 @@ export default class DynamicNotchExtension extends Extension {
       this._expandedView.opacity = 255;
     }
 
+    this._animateContentIn(this._expandedView, 10);
     this._animOnDone = () => {
       if (gen !== this._animGen) return;
       this._state = State.EXPANDED;
@@ -2073,8 +2241,79 @@ export default class DynamicNotchExtension extends Extension {
 
   // ------------------------------------------------------------ geometry
 
+  // GSettings string read that tolerates a stale installed schema.
+  _strSetting(key, fallback) {
+    try {
+      if (this._settings?.settings_schema?.has_key(key))
+        return this._settings.get_string(key);
+    } catch (_e) {}
+    return fallback;
+  }
+
+  _animStyle() {
+    return this._strSetting("animation-style", "default");
+  }
+
+  // Size transitions spring only in the spring style; other styles
+  // keep the stock cubic and differ in the content animation.
+  _easeMode() {
+    return this._animStyle() === "spring"
+      ? Clutter.AnimationMode.EASE_OUT_BACK
+      : Clutter.AnimationMode.EASE_OUT_CUBIC;
+  }
+
   _animationsEnabled() {
-    return this._ifaceSettings?.get_boolean("enable-animations") ?? true;
+    const system =
+      this._ifaceSettings?.get_boolean("enable-animations") ?? true;
+    return system && this._animStyle() !== "none";
+  }
+
+  // Content entrance per animation style, used on expand and on
+  // tab switches. Geometry keeps the stock ease; styles move the
+  // content only, and 'default' adds nothing.
+  _animateContentIn(actor, shift = 10) {
+    if (!actor || !this._animationsEnabled()) return;
+    const style = this._animStyle();
+    if (style === "default" || style === "none") return;
+    actor.remove_all_transitions();
+    actor.set_pivot_point(0.5, 0);
+    if (style === "fade") {
+      actor.opacity = 0;
+      actor.ease({
+        opacity: 255,
+        duration: 160,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "slide") {
+      actor.translation_y = shift;
+      actor.opacity = 0;
+      actor.ease({
+        translation_y: 0,
+        opacity: 255,
+        duration: 200,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "scale") {
+      actor.scale_x = 0.97;
+      actor.scale_y = 0.97;
+      actor.opacity = 0;
+      actor.ease({
+        scale_x: 1,
+        scale_y: 1,
+        opacity: 255,
+        duration: 200,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+    } else if (style === "spring") {
+      actor.translation_y = shift + 2;
+      actor.opacity = 0;
+      actor.ease({
+        translation_y: 0,
+        opacity: 255,
+        duration: 280,
+        mode: Clutter.AnimationMode.EASE_OUT_BACK,
+      });
+    }
   }
 
   _refreshGeometry() {
@@ -2191,6 +2430,16 @@ export default class DynamicNotchExtension extends Extension {
       !open && !this._peekActive && !this._eventActive;
   }
 
+  // The layout manager tracks fullscreen per monitor; read it at
+  // the point of decision so no cached flag can go stale.
+  _primaryInFullscreen() {
+    try {
+      return Main.layoutManager.primaryMonitor?.inFullscreen === true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   _applySize(animate = true) {
     const monitor = Main.layoutManager.primaryMonitor;
     if (!monitor || !this._notch) return;
@@ -2276,8 +2525,12 @@ export default class DynamicNotchExtension extends Extension {
     if (!expanded && !peek && !evt) this._clockWidget.set_size(notchW, notchH);
 
     // Fillets flare the Apple notch's TOP corners into the
-    // screen's top edge (the junction in the reference).
-    const showFillets = style === 0;
+    // screen's top edge (the junction in the reference). Never
+    // force them visible while a fullscreen window owns the
+    // monitor: this assignment runs on every size pass (the
+    // clock re-measures once a minute), which used to resurrect
+    // them over fullscreen apps.
+    const showFillets = style === 0 && !this._primaryInFullscreen();
     for (const f of [this._filletL, this._filletR]) {
       if (f) f.visible = showFillets;
     }
@@ -2292,7 +2545,7 @@ export default class DynamicNotchExtension extends Extension {
         width: notchW,
         height: notchH,
         duration: ANIM_MS,
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+        mode: this._easeMode(),
         onComplete: () => onDone?.(),
       });
       for (const layer of [this._backdrop, this._clipper]) {
@@ -2301,7 +2554,7 @@ export default class DynamicNotchExtension extends Extension {
           width: notchW,
           height: notchH,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
       }
       if (showFillets) {
@@ -2309,13 +2562,13 @@ export default class DynamicNotchExtension extends Extension {
           x: x - FILLET_R,
           y,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
         this._filletR.ease({
           x: x + notchW,
           y,
           duration: ANIM_MS,
-          mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+          mode: this._easeMode(),
         });
       }
     } else {
@@ -2405,48 +2658,6 @@ export default class DynamicNotchExtension extends Extension {
 
   // -------------------------------------------- providers / integration
 
-  // Copy feedback from clipboard OWNER changes (MetaSelection):
-  // no keyboard hooks, content never read, fully guarded.
-  _initClipboardWatch() {
-    this._selection = null;
-    this._selectionChangedId = 0;
-    this._lastCopyPeekUs = 0;
-    try {
-      const selection = global.display.get_selection();
-      if (!selection?.connect) return;
-      this._selection = selection;
-      this._selectionChangedId = selection.connect(
-        "owner-changed",
-        (_s, type, owner) => {
-          if (!owner) return;
-          try {
-            if (Meta.SelectionType && type !== Meta.SelectionType.CLIPBOARD)
-              return;
-          } catch (_e) {}
-          this._onClipboardOwnerChanged();
-        },
-      );
-    } catch (_e) {
-      this._selection = null;
-      this._selectionChangedId = 0;
-    }
-  }
-
-  _onClipboardOwnerChanged() {
-    const now = GLib.get_monotonic_time();
-    if (now - this._lastCopyPeekUs < 1200000) return; // one peek per copy action, not per signal burst
-    this._lastCopyPeekUs = now;
-    if (this._peekActive) return; // never clobber a notification / finish peek
-    this._showPeek(
-      {
-        iconName: "edit-copy-symbolic",
-        title: "Text Copied",
-        body: "You copied text to the clipboard",
-      },
-      2500,
-    );
-  }
-
   _initProviders() {
     // Failure-isolated: if the tray API differs, everything else keeps working.
     try {
@@ -2491,6 +2702,17 @@ export default class DynamicNotchExtension extends Extension {
     } catch (e) {
       logError(e, "dynamic-notch: system events unavailable");
       this._eventsProvider = null;
+    }
+
+    // Clipboard history (Tab 3), captured silently.
+    try {
+      this._clipProvider = new ClipboardProvider({
+        onChanged: () => this._refreshClipList(),
+      });
+      this._clipProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: clipboard history unavailable");
+      this._clipProvider = null;
     }
 
     // Do Not Disturb quick action (desktop notifications schema).
