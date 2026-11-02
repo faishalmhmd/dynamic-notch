@@ -203,9 +203,9 @@ export default class DynamicNotchExtension extends Extension {
     this._monitorsChangedId = 0;
 
     this._buildNotch();
-    Main.layoutManager.addChrome(this._notch);
-    Main.layoutManager.addChrome(this._filletL);
-    Main.layoutManager.addChrome(this._filletR);
+    Main.layoutManager.addChrome(this._notch, { trackFullscreen: true });
+    Main.layoutManager.addChrome(this._filletL, { trackFullscreen: true });
+    Main.layoutManager.addChrome(this._filletR, { trackFullscreen: true });
     this._applyNotchStyle();
     this._applySize(false);
 
@@ -234,6 +234,15 @@ export default class DynamicNotchExtension extends Extension {
         this._updatePanelAppearance();
       },
     );
+    // Re-evaluate fillet visibility the moment fullscreen starts
+    // or ends, instead of at the next size pass.
+    this._fullscreenChangedId = 0;
+    try {
+      this._fullscreenChangedId = Main.layoutManager.connect(
+        "primary-fullscreen-changed",
+        () => this._applySize(false),
+      );
+    } catch (_e) {}
 
     // --- Panel background tracking ---
     this._actorSignalIds.set(Main.overview, [
@@ -426,6 +435,9 @@ export default class DynamicNotchExtension extends Extension {
     if (this._monitorsChangedId)
       Main.layoutManager.disconnect(this._monitorsChangedId);
     this._monitorsChangedId = 0;
+    if (this._fullscreenChangedId)
+      Main.layoutManager.disconnect(this._fullscreenChangedId);
+    this._fullscreenChangedId = 0;
 
     for (const map of [this._actorSignalIds, this._windowSignalIds]) {
       if (!map) continue;
@@ -2418,6 +2430,16 @@ export default class DynamicNotchExtension extends Extension {
       !open && !this._peekActive && !this._eventActive;
   }
 
+  // The layout manager tracks fullscreen per monitor; read it at
+  // the point of decision so no cached flag can go stale.
+  _primaryInFullscreen() {
+    try {
+      return Main.layoutManager.primaryMonitor?.inFullscreen === true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   _applySize(animate = true) {
     const monitor = Main.layoutManager.primaryMonitor;
     if (!monitor || !this._notch) return;
@@ -2503,8 +2525,12 @@ export default class DynamicNotchExtension extends Extension {
     if (!expanded && !peek && !evt) this._clockWidget.set_size(notchW, notchH);
 
     // Fillets flare the Apple notch's TOP corners into the
-    // screen's top edge (the junction in the reference).
-    const showFillets = style === 0;
+    // screen's top edge (the junction in the reference). Never
+    // force them visible while a fullscreen window owns the
+    // monitor: this assignment runs on every size pass (the
+    // clock re-measures once a minute), which used to resurrect
+    // them over fullscreen apps.
+    const showFillets = style === 0 && !this._primaryInFullscreen();
     for (const f of [this._filletL, this._filletR]) {
       if (f) f.visible = showFillets;
     }
