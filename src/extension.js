@@ -140,6 +140,9 @@ export default class DynamicNotchExtension extends Extension {
     this._calAvailable = false;
     this._eventsProvider = null;
     this._clipProvider = null;
+    this._dateMenu = null;
+    this._dateMenuContainer = null;
+    this._dateMenuOpenId = 0;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -293,6 +296,7 @@ export default class DynamicNotchExtension extends Extension {
 
     this._updatePanelAppearance();
     this._initProviders();
+    this._initDateMenuSuppression();
     this._initApps();
     this._refreshClipList();
     this._renderCalendar();
@@ -324,6 +328,16 @@ export default class DynamicNotchExtension extends Extension {
     this._appsDebounceId = 0;
 
     // Providers first: restore stock banners while our actors still exist.
+    if (this._dateMenu && this._dateMenuOpenId) {
+      try {
+        this._dateMenu.menu.disconnect(this._dateMenuOpenId);
+      } catch (_e) {}
+    }
+    this._dateMenuOpenId = 0;
+    if (this._dateMenuContainer)
+      this._dateMenuContainer.visible = this._dateMenuWasVisible ?? true;
+    this._dateMenu = null;
+    this._dateMenuContainer = null;
     if (this._notifProvider) {
       try {
         this._notifProvider.destroy();
@@ -2657,6 +2671,50 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   // -------------------------------------------- providers / integration
+
+  // The notch replaces the stock calendar: hide the dateMenu's
+  // panel container, and reroute any programmatic open (Super+V
+  // still toggles the stock menu) to the island instead.
+  _initDateMenuSuppression() {
+    try {
+      const dm = Main.panel?.statusArea?.dateMenu;
+      if (!dm) return;
+      this._dateMenu = dm;
+      const box = dm.container ?? dm;
+      this._dateMenuContainer = box;
+      this._dateMenuWasVisible = box.visible !== false;
+      box.visible = false;
+      if (dm.menu?.connect) {
+        this._dateMenuOpenId = dm.menu.connect(
+          "open-state-changed",
+          (_menu, isOpen) => {
+            if (!isOpen) {
+              this._restoreBannerBlock();
+              return;
+            }
+            try {
+              dm.menu.close();
+            } catch (_e) {}
+            if (this._state === State.COMPACT) this._openPanel();
+          },
+        );
+      }
+    } catch (e) {
+      logError(e, "dynamic-notch: dateMenu suppression unavailable");
+      this._dateMenu = null;
+      this._dateMenuContainer = null;
+      this._dateMenuOpenId = 0;
+    }
+  }
+
+  // dateMenu writes bannerBlocked=false when its menu closes;
+  // put the notification provider's block back.
+  _restoreBannerBlock() {
+    if (!this._notifProvider) return;
+    try {
+      Main.messageTray.bannerBlocked = true;
+    } catch (_e) {}
+  }
 
   _initProviders() {
     // Failure-isolated: if the tray API differs, everything else keeps working.
