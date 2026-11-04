@@ -44,6 +44,7 @@ const TAB_TITLES = [
   ["main", "Main"],
   ["timer", "Timer"],
   ["clipboard", "Clipboard"],
+  ["media", "Media"],
 ];
 
 export default class DynamicNotchPreferences extends ExtensionPreferences {

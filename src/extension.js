@@ -17,12 +17,13 @@ import { NotificationsProvider } from "./lib/notification.js";
 import { CalendarProvider } from "./lib/calendarProvider.js";
 import { SystemEventsProvider } from "./lib/event.js";
 import { ClipboardProvider } from "./lib/clipboard.js";
+import { MusicProvider } from "./lib/musicProvider.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
 const PEEK_W = 480;
 const PEEK_H = 78;
-const ANIM_MS = 260;
+const ANIM_MS = 300;
 const PANEL_DEBOUNCE_MS = 100;
 const NOTIF_PEEK_MS = 4500;
 const TIMER_PEEK_MS = 6000;
@@ -109,6 +110,7 @@ const TAB_DEFS = [
   ["main", "Main", "x-office-calendar-symbolic"],
   ["timer", "Timer", "alarm-symbolic"],
   ["clipboard", "Clipboard", "edit-paste-symbolic"],
+  ["media", "Media", "media-playback-start-symbolic"],
 ];
 
 const ICON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_.]*$/;
@@ -140,6 +142,11 @@ export default class DynamicNotchExtension extends Extension {
     this._calAvailable = false;
     this._eventsProvider = null;
     this._clipProvider = null;
+    this._musicProvider = null;
+    this._music = null;
+    this._eqAreas = [];
+    this._eqTimerId = 0;
+    this._eqPhase = 0;
     this._dateMenu = null;
     this._dateMenuContainer = null;
     this._dateMenuOpenId = 0;
@@ -362,6 +369,16 @@ export default class DynamicNotchExtension extends Extension {
       } catch (_e) {}
       this._clipProvider = null;
     }
+    if (this._musicProvider) {
+      try {
+        this._musicProvider.destroy();
+      } catch (_e) {}
+      this._musicProvider = null;
+    }
+    if (this._eqTimerId) {
+      GLib.source_remove(this._eqTimerId);
+      this._eqTimerId = 0;
+    }
     for (const proc of this._scriptProcs ?? []) {
       try {
         proc.force_exit();
@@ -528,6 +545,7 @@ export default class DynamicNotchExtension extends Extension {
     this._pageMain?.destroy();
     this._pageTimer?.destroy();
     this._pageClipboard?.destroy();
+    this._pageMedia?.destroy();
     this._clockWidget?.destroy();
     this._expandedView?.destroy();
     this._backdrop?.destroy();
@@ -568,6 +586,25 @@ export default class DynamicNotchExtension extends Extension {
     this._timerTitleEntry = null;
     this._tabProgressTrack = null;
     this._tabProgressFill = null;
+    this._musicSection = null;
+    this._pageMedia = null;
+    this._mediaContent = null;
+    this._mediaEmpty = null;
+    this._musicSource = null;
+    this._musicElapsed = null;
+    this._musicTotal = null;
+    this._musicArt = null;
+    this._musicArtIcon = null;
+    this._musicTitle = null;
+    this._musicArtist = null;
+    this._musicTrack = null;
+    this._musicFill = null;
+    this._musicPrevBtn = null;
+    this._musicPlayBtn = null;
+    this._musicNextBtn = null;
+    this._musicChip = null;
+    this._musicChipLabel = null;
+    this._eqAreas = null;
     this._tooltip = null;
     this._appsRow = null;
     this._tabBar = null;
@@ -637,6 +674,7 @@ export default class DynamicNotchExtension extends Extension {
       x_align: Clutter.ActorAlign.CENTER,
     });
     this._clockWidget.add_child(this._clockTime);
+    this._applyTabular(this._clockTime);
 
     this._timerChip = new St.BoxLayout({
       style_class: "dn-chip",
@@ -826,6 +864,7 @@ export default class DynamicNotchExtension extends Extension {
       y_align: Clutter.ActorAlign.CENTER,
     });
     this._expandedClock = new St.Label({ style_class: "dn-corner-clock" });
+    this._applyTabular(this._expandedClock);
     this._expandedDate = new St.Label({ style_class: "dn-corner-date" });
     corner.add_child(this._expandedClock);
     corner.add_child(this._expandedDate);
@@ -912,6 +951,8 @@ export default class DynamicNotchExtension extends Extension {
     this._tabProgressTrack.add_child(this._tabProgressFill);
     this._pageTimer.add_child(this._tabProgressTrack);
     root.add_child(this._pageTimer);
+    this._pageMedia = this._buildMediaPage();
+    root.add_child(this._pageMedia);
     this._pageClipboard = this._buildClipboardPage();
     root.add_child(this._pageClipboard);
     this._setTab("main");
@@ -1095,17 +1136,55 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   _showPage(name) {
+    const prev = this._page;
     this._page = name;
-    if (this._pageMain) this._pageMain.visible = name === "main";
-    if (this._pageTimer) this._pageTimer.visible = name === "timer";
-    if (this._pageClipboard) this._pageClipboard.visible = name === "clipboard";
-    const page =
-      name === "main"
-        ? this._pageMain
-        : name === "timer"
-          ? this._pageTimer
-          : this._pageClipboard;
-    if (page && this._state === State.EXPANDED) this._animateContentIn(page, 8);
+    const pages = {
+      main: this._pageMain,
+      timer: this._pageTimer,
+      clipboard: this._pageClipboard,
+      media: this._pageMedia,
+    };
+    const incoming = pages[name];
+    const outgoing = prev && prev !== name ? pages[prev] : null;
+    // Crossfade only while fully open; during the expand morph
+    // the whole-view fade covers the swap.
+    const animate =
+      !!incoming &&
+      !!outgoing &&
+      this._state === State.EXPANDED &&
+      this._animationsEnabled();
+    for (const [id, page] of Object.entries(pages)) {
+      if (!page) continue;
+      if (id === name) {
+        page.visible = true;
+        if (!animate) {
+          page.remove_all_transitions();
+          page.opacity = 255;
+          page.translation_y = 0;
+          page.scale_x = 1;
+          page.scale_y = 1;
+        }
+      } else if (page !== outgoing || !animate) {
+        page.remove_all_transitions();
+        page.visible = false;
+        page.opacity = 255;
+      }
+    }
+    if (animate) {
+      outgoing.remove_all_transitions();
+      outgoing.ease({
+        opacity: 0,
+        duration: 120,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+        onComplete: () => {
+          if (this._page !== prev) {
+            outgoing.visible = false;
+            outgoing.opacity = 255;
+          }
+        },
+      });
+      this._animateContentIn(incoming, 8, 220);
+    }
     this._hideTooltip();
     this._syncQaStates();
   }
@@ -1920,6 +1999,7 @@ export default class DynamicNotchExtension extends Extension {
       text: this._timerTitle,
       hint_text: "Timer title",
       can_focus: true,
+      x_expand: true,
     });
     // 'text-changed' lives on the inner ClutterText, not on St.Entry itself.
     this._timerTitleEntry.get_clutter_text().connect("text-changed", () => {
@@ -1935,7 +2015,9 @@ export default class DynamicNotchExtension extends Extension {
         style_class: "dn-time-entry",
         hint_text: hint,
         can_focus: true,
+        y_align: Clutter.ActorAlign.CENTER,
       });
+      entry.set_height(24);
       entry
         .get_clutter_text()
         .connect("text-changed", () => this._sanitizeDurEntry(entry));
@@ -1953,11 +2035,15 @@ export default class DynamicNotchExtension extends Extension {
     this._durM = mkDurEntry("MM");
 
     const controls = new St.BoxLayout({ style_class: "dn-timer-controls" });
-    this._btnPlayPause = new St.Button({ style_class: "dn-timer-button" });
+    this._btnPlayPause = new St.Button({
+      style_class: "dn-timer-button",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._btnPlayPause.set_height(24);
     const ppBox = new St.BoxLayout({ style_class: "dn-qa-content" });
     this._playPauseIcon = new St.Icon({
       icon_name: "media-playback-start-symbolic",
-      icon_size: 14,
+      icon_size: 12,
       y_align: Clutter.ActorAlign.CENTER,
     });
     this._playPauseLabel = new St.Label({
@@ -1975,7 +2061,9 @@ export default class DynamicNotchExtension extends Extension {
     this._btnReset = new St.Button({
       label: "Reset",
       style_class: "dn-timer-button",
+      y_align: Clutter.ActorAlign.CENTER,
     });
+    this._btnReset.set_height(24);
     this._resetClickedId = this._btnReset.connect("clicked", () =>
       this._timerReset(),
     );
@@ -2008,6 +2096,19 @@ export default class DynamicNotchExtension extends Extension {
     return strip;
   }
 
+  // Tabular figures: every digit the same width, so HH:MM never
+  // changes width across minute changes and the pill's measured
+  // length stays constant. Guarded: older Pango bindings may
+  // not expose the font-features attribute.
+  _applyTabular(label) {
+    try {
+      if (typeof Pango.attr_font_features_new !== "function") return;
+      const attrs = new Pango.AttrList();
+      attrs.insert(Pango.attr_font_features_new("tnum"));
+      label.get_clutter_text().set_attributes(attrs);
+    } catch (_e) {}
+  }
+
   _updateClock() {
     if (!this._clockTime) return;
     const now = GLib.DateTime.new_now_local();
@@ -2015,12 +2116,14 @@ export default class DynamicNotchExtension extends Extension {
     this._clockTime.text = stamp;
     this._expandedClock.text = stamp;
     this._expandedDate.text = now.format("%A");
-    // The collapsed pill sizes to this text; re-measure (eased)
-    // only when the stamp actually changes, i.e. once a minute.
+    // The collapsed pill sizes to this text; re-measure only
+    // when the stamp actually changes, i.e. once a minute.
+    // Snap, never ease: the correction is a few px of digit
+    // width, and gliding it over ANIM_MS reads as a blink.
     if (stamp !== this._lastStamp) {
       this._lastStamp = stamp;
       if (this._state === State.COMPACT && !this._peekActive)
-        this._applySize(true);
+        this._applySize(false);
     }
 
     // Day rollover while the Shell keeps running: keep the
@@ -2039,6 +2142,10 @@ export default class DynamicNotchExtension extends Extension {
       this._renderCalendar();
     }
     this._lastDayKey = dayKey;
+
+    // The music progress bar rides this 1s tick while open.
+    if (this._state === State.EXPANDED && this._page === "media")
+      this._renderMusicProgress();
   }
 
   // ------------------------------------------------------- open / close
@@ -2061,23 +2168,17 @@ export default class DynamicNotchExtension extends Extension {
       GLib.source_remove(this._peekTimeoutId);
       this._peekTimeoutId = 0;
     }
+    const clockWasVisible = this._clockWidget.visible;
     this._syncViews();
+    if (clockWasVisible) this._fadeClockOut();
     this._setTab("main");
     this._renderCalendar();
     this._refreshNotifList();
     this._refreshApps();
     this._expandedView.remove_all_transitions();
-    if (this._animationsEnabled()) {
-      this._expandedView.ease({
-        opacity: 255,
-        duration: ANIM_MS,
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-      });
-    } else {
-      this._expandedView.opacity = 255;
-    }
-
-    this._animateContentIn(this._expandedView, 10);
+    if (this._animationsEnabled())
+      this._animateContentIn(this._expandedView, 10, ANIM_MS);
+    else this._expandedView.opacity = 255;
     this._animOnDone = () => {
       if (gen !== this._animGen) return;
       this._state = State.EXPANDED;
@@ -2106,6 +2207,7 @@ export default class DynamicNotchExtension extends Extension {
     this._hideTooltip();
     // Outside handlers are only needed while fully open / opening.
     this._removeOutsideHandlers();
+    this._fadeClockIn();
 
     this._expandedView.remove_all_transitions();
     if (this._animationsEnabled()) {
@@ -2283,28 +2385,21 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   // Content entrance per animation style, used on expand and on
-  // tab switches. Geometry keeps the stock ease; styles move the
-  // content only, and 'default' adds nothing.
-  _animateContentIn(actor, shift = 10) {
+  // tab switches: every style fades (the smooth base, spanning
+  // the caller's duration); slide/scale/spring add motion.
+  _animateContentIn(actor, shift = 10, duration = 0) {
     if (!actor || !this._animationsEnabled()) return;
     const style = this._animStyle();
-    if (style === "default" || style === "none") return;
+    if (style === "none") return;
     actor.remove_all_transitions();
     actor.set_pivot_point(0.5, 0);
-    if (style === "fade") {
-      actor.opacity = 0;
-      actor.ease({
-        opacity: 255,
-        duration: 160,
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-      });
-    } else if (style === "slide") {
+    if (style === "slide") {
       actor.translation_y = shift;
       actor.opacity = 0;
       actor.ease({
         translation_y: 0,
         opacity: 255,
-        duration: 200,
+        duration: duration || 200,
         mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
       });
     } else if (style === "scale") {
@@ -2315,7 +2410,7 @@ export default class DynamicNotchExtension extends Extension {
         scale_x: 1,
         scale_y: 1,
         opacity: 255,
-        duration: 200,
+        duration: duration || 200,
         mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
       });
     } else if (style === "spring") {
@@ -2324,8 +2419,15 @@ export default class DynamicNotchExtension extends Extension {
       actor.ease({
         translation_y: 0,
         opacity: 255,
-        duration: 280,
+        duration: duration || 280,
         mode: Clutter.AnimationMode.EASE_OUT_BACK,
+      });
+    } else {
+      actor.opacity = 0;
+      actor.ease({
+        opacity: 255,
+        duration: duration || 200,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
       });
     }
   }
@@ -2364,9 +2466,32 @@ export default class DynamicNotchExtension extends Extension {
 
   _expandedDims(monitor) {
     if (this._page === "timer") return this._timerTabDims(monitor);
+    if (this._page === "media") return this._mediaTabDims(monitor);
     return [
       Math.min(EXPANDED_W, Math.max(320, monitor.width - 16)),
       Math.min(EXPANDED_H, Math.max(240, monitor.height - 16)),
+    ];
+  }
+
+  // The media tab sizes itself like the timer tab does.
+  _mediaTabDims(monitor) {
+    let w = 480,
+      contentH = 130;
+    if (this._pageMedia) {
+      const [, natW] = this._pageMedia.get_preferred_width(-1);
+      const [, natH] = this._pageMedia.get_preferred_height(-1);
+      if (natW > 100) w = natW + 24;
+      if (natH > 20) contentH = natH;
+    }
+    let topH = 40;
+    if (this._topBar) {
+      const [, natTop] = this._topBar.get_preferred_height(-1);
+      if (natTop > 10) topH = natTop;
+    }
+    const h = contentH + topH + 24 + 8;
+    return [
+      Math.min(w, Math.max(340, monitor.width - 16)),
+      Math.min(h, Math.max(150, monitor.height - 16)),
     ];
   }
 
@@ -2442,6 +2567,47 @@ export default class DynamicNotchExtension extends Extension {
     this._eventView.visible = !open && !this._peekActive && this._eventActive;
     this._clockWidget.visible =
       !open && !this._peekActive && !this._eventActive;
+  }
+
+  // The compact clock crossfades with the panel morph instead of
+  // popping in and out at the state flips.
+  _fadeClockOut() {
+    const clock = this._clockWidget;
+    if (!clock) return;
+    clock.remove_all_transitions();
+    if (!this._animationsEnabled()) {
+      clock.visible = false;
+      return;
+    }
+    clock.visible = true;
+    clock.ease({
+      opacity: 0,
+      duration: 140,
+      mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      onComplete: () => {
+        if (this._state === State.EXPANDING || this._state === State.EXPANDED) {
+          clock.visible = false;
+          clock.opacity = 255;
+        }
+      },
+    });
+  }
+
+  _fadeClockIn() {
+    const clock = this._clockWidget;
+    if (!clock || this._peekActive || this._eventActive) return;
+    clock.remove_all_transitions();
+    clock.visible = true;
+    if (!this._animationsEnabled()) {
+      clock.opacity = 255;
+      return;
+    }
+    clock.opacity = 0;
+    clock.ease({
+      opacity: 255,
+      duration: Math.round(ANIM_MS * 0.7),
+      mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+    });
   }
 
   // The layout manager tracks fullscreen per monitor; read it at
@@ -2716,6 +2882,301 @@ export default class DynamicNotchExtension extends Extension {
     } catch (_e) {}
   }
 
+  // ------------------------------------------------------------ music
+
+  // Tiny vector equalizer: cairo bars riding a sine phase — the
+  // smooth "now playing" motion, redrawn only while playing.
+  _makeEqArea() {
+    const area = new St.DrawingArea({
+      width: 16,
+      height: 12,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    area.connect("repaint", () => this._drawEq(area));
+    this._eqAreas.push(area);
+    return area;
+  }
+
+  _drawEq(area) {
+    try {
+      const ctx = area.get_context();
+      const [w, h] = area.get_surface_size();
+      const col = parseColor(this._settings.get_string("accent-color"));
+      if (col) ctx.setSourceRGBA(col.r / 255, col.g / 255, col.b / 255, 1);
+      else ctx.setSourceRGBA(1, 1, 1, 0.9);
+      const bars = 4,
+        bw = 2.4;
+      const gap = (w - bars * bw) / (bars - 1);
+      const playing = this._music?.status === "Playing";
+      for (let i = 0; i < bars; i++) {
+        const f = playing
+          ? 0.3 + 0.7 * Math.abs(Math.sin(this._eqPhase + i * 1.35))
+          : 0.3;
+        const bh = Math.max(2, h * f);
+        ctx.rectangle(i * (bw + gap), h - bh, bw, bh);
+        ctx.fill();
+      }
+      ctx.$dispose();
+    } catch (_e) {}
+  }
+
+  _syncEqTimer() {
+    const play = this._music?.status === "Playing" && this._animationsEnabled();
+    if (play && !this._eqTimerId) {
+      this._eqTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+        this._eqPhase += 0.16;
+        for (const a of this._eqAreas ?? []) if (a.visible) a.queue_repaint();
+        return GLib.SOURCE_CONTINUE;
+      });
+    } else if (!play && this._eqTimerId) {
+      GLib.source_remove(this._eqTimerId);
+      this._eqTimerId = 0;
+      for (const a of this._eqAreas ?? []) a.queue_repaint();
+    }
+  }
+
+  _buildMediaPage() {
+    const page = new St.BoxLayout({
+      style_class: "dn-page-media",
+      orientation: Clutter.Orientation.VERTICAL,
+      y_expand: true,
+      visible: false,
+    });
+    this._pageMedia = page;
+    // Empty state: the tab exists even with no player.
+    this._mediaEmpty = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-media-empty",
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+      y_expand: true,
+    });
+    this._mediaEmpty.add_child(
+      new St.Icon({
+        icon_name: "media-playback-start-symbolic",
+        icon_size: 28,
+        x_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    this._mediaEmpty.add_child(
+      new St.Label({
+        text: "Nothing playing",
+        style_class: "dn-media-empty-title",
+        x_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    this._mediaEmpty.add_child(
+      new St.Label({
+        text: "Media from any app will appear here",
+        style_class: "dn-music-artist",
+        x_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    page.add_child(this._mediaEmpty);
+    // Content: art + info + progress, controls underneath.
+    this._mediaContent = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-media-content",
+      visible: false,
+    });
+    const row = new St.BoxLayout({ style_class: "dn-media-row" });
+    this._musicArt = new St.Widget({
+      style_class: "dn-music-art",
+      layout_manager: new Clutter.BinLayout(),
+      width: 64,
+      height: 64,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._musicArtIcon = new St.Icon({
+      icon_name: "audio-x-generic-symbolic",
+      icon_size: 26,
+      x_align: Clutter.ActorAlign.CENTER,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._musicArt.add_child(this._musicArtIcon);
+    row.add_child(this._musicArt);
+    const mid = new St.BoxLayout({
+      orientation: Clutter.Orientation.VERTICAL,
+      style_class: "dn-music-mid",
+      x_expand: true,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    this._musicSource = new St.Label({ style_class: "dn-music-source" });
+    this._musicSource.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    mid.add_child(this._musicSource);
+    this._musicTitle = new St.Label({ style_class: "dn-music-title" });
+    this._musicTitle.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    mid.add_child(this._musicTitle);
+    this._musicArtist = new St.Label({ style_class: "dn-music-artist" });
+    this._musicArtist.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    mid.add_child(this._musicArtist);
+    this._musicTrack = new St.Widget({
+      layout_manager: new Clutter.FixedLayout(),
+      style_class: "dn-progress-track",
+      x_expand: true,
+    });
+    this._musicTrack.set_height(3);
+    this._musicFill = new St.Widget({ style: this._progressStyle() });
+    this._musicFill.set_size(0, 3);
+    this._musicTrack.add_child(this._musicFill);
+    mid.add_child(this._musicTrack);
+    const times = new St.BoxLayout({ style_class: "dn-media-times" });
+    this._musicElapsed = new St.Label({
+      text: "0:00",
+      style_class: "dn-music-time",
+    });
+    times.add_child(this._musicElapsed);
+    times.add_child(new St.Widget({ x_expand: true }));
+    this._musicTotal = new St.Label({
+      text: "0:00",
+      style_class: "dn-music-time",
+    });
+    times.add_child(this._musicTotal);
+    mid.add_child(times);
+    row.add_child(mid);
+    this._mediaContent.add_child(row);
+    const ctrls = new St.BoxLayout({
+      style_class: "dn-music-controls",
+      x_align: Clutter.ActorAlign.CENTER,
+    });
+    const mkBtn = (icon, name, fn) => {
+      const b = new St.Button({
+        style_class: "dn-qa-button",
+        child: new St.Icon({ icon_name: icon, icon_size: 18 }),
+        accessible_name: name,
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      b.connect("clicked", fn);
+      ctrls.add_child(b);
+      return b;
+    };
+    this._musicPrevBtn = mkBtn(
+      "media-skip-backward-symbolic",
+      "Previous track",
+      () => this._musicProvider?.previous(),
+    );
+    this._musicPlayBtn = mkBtn(
+      "media-playback-start-symbolic",
+      "Play or pause",
+      () => this._musicProvider?.playPause(),
+    );
+    this._musicNextBtn = mkBtn(
+      "media-skip-forward-symbolic",
+      "Next track",
+      () => this._musicProvider?.next(),
+    );
+    ctrls.add_child(this._makeEqArea());
+    this._mediaContent.add_child(ctrls);
+    page.add_child(this._mediaContent);
+    return page;
+  }
+
+  _onMusicChanged(snap) {
+    const prevId = this._music
+      ? `${this._music.title}|${this._music.artist}`
+      : "";
+    const wasAvailable = !!this._music;
+    this._music = snap;
+    this._renderMusic();
+    // A genuinely new track surfaces briefly in the notch.
+    const nowId = snap ? `${snap.title}|${snap.artist}` : "";
+    if (snap && snap.status === "Playing" && prevId && nowId !== prevId) {
+      let gicon = null;
+      try {
+        if (snap.artUrl)
+          gicon = new Gio.FileIcon({
+            file: Gio.File.new_for_uri(snap.artUrl),
+          });
+      } catch (_e) {}
+      this._showEvent({
+        gicon,
+        iconName: "audio-x-generic-symbolic",
+        text: snap.artist ? `${snap.title} · ${snap.artist}` : snap.title,
+      });
+    }
+    if (
+      wasAvailable !== !!snap &&
+      this._page === "media" &&
+      (this._state === State.EXPANDED || this._state === State.EXPANDING)
+    )
+      this._applySize(true);
+  }
+
+  _renderMusic() {
+    const snap = this._music;
+    if (this._mediaContent) this._mediaContent.visible = !!snap;
+    if (this._mediaEmpty) this._mediaEmpty.visible = !snap;
+    this._syncEqTimer();
+    if (!snap) return;
+    if (this._musicSource) {
+      const app = snap.busName
+        .replace("org.mpris.MediaPlayer2.", "")
+        .split(".")[0];
+      this._musicSource.text =
+        app.charAt(0).toUpperCase() +
+        app.slice(1) +
+        (snap.status === "Paused" ? " · Paused" : "");
+    }
+    if (this._musicTitle) this._musicTitle.text = snap.title || "Unknown title";
+    if (this._musicArtist)
+      this._musicArtist.text = snap.artist || snap.album || "";
+    if (this._musicArt) {
+      if (snap.artUrl) {
+        this._musicArt.set_style(
+          `background-image: url("${snap.artUrl}");` +
+            " background-size: cover;",
+        );
+        this._musicArtIcon.visible = false;
+      } else {
+        this._musicArt.set_style("");
+        this._musicArtIcon.visible = true;
+      }
+    }
+    if (this._musicPlayBtn) {
+      this._musicPlayBtn.child.icon_name =
+        snap.status === "Playing"
+          ? "media-playback-pause-symbolic"
+          : "media-playback-start-symbolic";
+      const canPlay = snap.canPlay || snap.canPause;
+      this._musicPlayBtn.reactive = canPlay;
+      this._musicPlayBtn.opacity = canPlay ? 255 : 110;
+      this._musicPrevBtn.reactive = snap.canPrev;
+      this._musicPrevBtn.opacity = snap.canPrev ? 255 : 110;
+      this._musicNextBtn.reactive = snap.canNext;
+      this._musicNextBtn.opacity = snap.canNext ? 255 : 110;
+    }
+    this._renderMusicProgress();
+  }
+
+  // Position is not signalled by MPRIS; project it locally from
+  // the last snapshot while playing.
+  _musicPositionUs() {
+    const s = this._music;
+    if (!s) return 0;
+    if (s.status !== "Playing") return s.positionUs;
+    const pos = s.positionUs + (GLib.get_monotonic_time() - s.stampUs);
+    return s.lengthUs > 0 ? Math.min(pos, s.lengthUs) : pos;
+  }
+
+  _renderMusicProgress() {
+    if (!this._music || !this._musicTrack) return;
+    const s = this._music;
+    const fmt = (us) => {
+      const sec = Math.max(0, Math.floor(us / 1e6));
+      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    };
+    if (this._musicElapsed)
+      this._musicElapsed.text = fmt(this._musicPositionUs());
+    if (this._musicTotal)
+      this._musicTotal.text = s.lengthUs > 0 ? fmt(s.lengthUs) : "—";
+    if (!this._musicFill) return;
+    const w = this._musicTrack.get_width();
+    if (!(w > 0)) return;
+    const frac =
+      s.lengthUs > 0 ? Math.min(1, this._musicPositionUs() / s.lengthUs) : 0;
+    this._musicFill.set_size(Math.round(frac * w), 3);
+  }
+
   _initProviders() {
     // Failure-isolated: if the tray API differs, everything else keeps working.
     try {
@@ -2771,6 +3232,17 @@ export default class DynamicNotchExtension extends Extension {
     } catch (e) {
       logError(e, "dynamic-notch: clipboard history unavailable");
       this._clipProvider = null;
+    }
+
+    // Music (MPRIS): compact now-playing + Main-tab section.
+    try {
+      this._musicProvider = new MusicProvider({
+        onChanged: (s) => this._onMusicChanged(s),
+      });
+      this._musicProvider.start();
+    } catch (e) {
+      logError(e, "dynamic-notch: music integration unavailable");
+      this._musicProvider = null;
     }
 
     // Do Not Disturb quick action (desktop notifications schema).
@@ -3142,17 +3614,14 @@ export default class DynamicNotchExtension extends Extension {
     sub.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
     texts.add_child(sub);
     if (f.body && f.body !== f.title) {
-      // Capped in JS so the wrapped body stays within ~2 lines.
-      const bodyText =
-        f.body.length > 110 ? `${f.body.slice(0, 110).trimEnd()}…` : f.body;
+      // One line, ellipsized by the layout itself: a long
+      // body ends with "…" at the row's real width instead
+      // of being hard-cut at a fixed character count.
       const body = new St.Label({
-        text: bodyText,
+        text: f.body.replace(/\s+/g, " ").trim(),
         style_class: "dn-notif-item-sub",
       });
-      const bt = body.get_clutter_text();
-      bt.set_line_wrap(true);
-      bt.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
-      bt.set_ellipsize(Pango.EllipsizeMode.END);
+      body.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
       texts.add_child(body);
     }
     row.add_child(texts);
@@ -3575,12 +4044,23 @@ export default class DynamicNotchExtension extends Extension {
           )
         : 0;
     this._setProgress(this._timerProgressFill, frac, 56);
-    if (this._tabProgressTrack)
+    if (this._tabProgressTrack) {
+      // No stray empty track while idle: it only exists
+      // once the timer is actually running/paused/finished.
+      const showTrack = state !== "idle";
+      if (this._tabProgressTrack.visible !== showTrack) {
+        this._tabProgressTrack.visible = showTrack;
+        // The page self-sizes: grow/shrink the open panel
+        // by the track's height on the transition.
+        if (this._state === State.EXPANDED || this._state === State.EXPANDING)
+          this._applySize(true);
+      }
       this._setProgress(
         this._tabProgressFill,
         frac,
         this._tabProgressTrack.get_width(),
       );
+    }
     this._updateCompactDisplay();
     this._syncQaStates();
   }
