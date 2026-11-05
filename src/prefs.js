@@ -150,6 +150,47 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       row.add_suffix(button);
       return row;
     };
+    const ACCENT_PRESETS = [
+      ["Blue", "rgb(53,132,228)"],
+      ["Teal", "rgb(33,144,164)"],
+      ["Green", "rgb(58,148,74)"],
+      ["Yellow", "rgb(200,136,0)"],
+      ["Orange", "rgb(237,91,0)"],
+      ["Red", "rgb(230,45,66)"],
+      ["Pink", "rgb(213,97,153)"],
+      ["Purple", "rgb(145,65,172)"],
+      ["Slate", "rgb(111,131,150)"],
+    ];
+    const accentPresets = () => {
+      const row = new Adw.ActionRow({
+        title: "Accent Presets",
+        subtitle: "One tap applies a preset accent color",
+      });
+      const box = new Gtk.Box({
+        spacing: 6,
+        valign: Gtk.Align.CENTER,
+      });
+      for (const [name, rgb] of ACCENT_PRESETS) {
+        const b = new Gtk.Button({
+          tooltip_text: name,
+          width_request: 22,
+          height_request: 22,
+        });
+        const css = new Gtk.CssProvider();
+        css.load_from_string(
+          `button { background: ${rgb}; border-radius: 999px;` +
+            " border: none; min-width: 22px; min-height: 22px; }",
+        );
+        b.get_style_context().add_provider(
+          css,
+          Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        b.connect("clicked", () => settings.set_string("accent-color", rgb));
+        box.append(b);
+      }
+      row.add_suffix(box);
+      return row;
+    };
     // --- Top panel (the GNOME panel itself) ---
     const panel = new Adw.PreferencesGroup({
       title: "Top Panel",
@@ -209,6 +250,7 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     const appearance = new Adw.PreferencesGroup({ title: "Notch Appearance" });
     appearance.add(colorRow("Notch Background Color", "notch-bg", false));
     appearance.add(colorRow("Accent Color", "accent-color", false));
+    appearance.add(accentPresets());
     appearance.add(
       enumRow("Animation Style", "animation-style", [
         "Default",

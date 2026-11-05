@@ -629,6 +629,8 @@
 
 .dn-page-media {
   spacing: 6px;
+  padding: 10px;
+  border-radius: 14px;
 }
 
 .dn-media-row {
@@ -637,6 +639,7 @@
 
 .dn-media-content {
   spacing: 10px;
+  padding: 2px;
 }
 
 .dn-media-empty {
