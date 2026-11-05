@@ -40,6 +40,13 @@ const PlayerProxy = Gio.DBusProxy.makeProxyWrapper(`
     <property name="CanControl" type="b" access="read"/>
     <method name="Next"/>
     <method name="Previous"/>
+    <method name="Seek">
+      <arg type="x" direction="in"/>
+    </method>
+    <method name="SetPosition">
+      <arg type="o" direction="in"/>
+      <arg type="x" direction="in"/>
+    </method>
     <method name="Pause"/>
     <method name="PlayPause"/>
     <method name="Play"/>
@@ -132,6 +139,34 @@ export class MusicProvider {
 
   previous() {
     this._control("PreviousRemote");
+  }
+
+  seek(offsetUs) {
+    const entry = this._selected();
+    if (!entry) return;
+    this._lockName = entry.busName;
+    this._lockUntilUs = GLib.get_monotonic_time() + 3000000;
+    entry.proxy.SeekRemote?.(offsetUs);
+  }
+
+  // Absolute seek (progress-bar drag). Without a track id,
+  // fall back to a relative Seek from the projected position.
+  setPosition(positionUs) {
+    const entry = this._selected();
+    if (!entry) return;
+    this._lockName = entry.busName;
+    this._lockUntilUs = GLib.get_monotonic_time() + 3000000;
+    const trackId = entry.metadata?.["mpris:trackid"];
+    if (trackId) {
+      entry.proxy.SetPositionRemote?.(trackId, Math.round(positionUs));
+    } else {
+      const now = GLib.get_monotonic_time();
+      const cur =
+        entry.status === "Playing"
+          ? entry.positionUs + (now - entry.stamp)
+          : entry.positionUs;
+      entry.proxy.SeekRemote?.(Math.round(positionUs - cur));
+    }
   }
 
   _addPlayer(busName) {
@@ -263,12 +298,7 @@ export class MusicProvider {
       -1,
       null,
       (c, res) => {
-        if (
-          this._destroyed ||
-          !this._players.has(entry.busName) ||
-          entry.gotPayload
-        )
-          return;
+        if (this._destroyed || !this._players.has(entry.busName)) return;
         try {
           const [props] = c.call_finish(res).unpack();
           if (!props) return;
@@ -276,21 +306,25 @@ export class MusicProvider {
             const v = props.lookup_value(k, new GLib.VariantType(t));
             return v ? v.deep_unpack() : undefined;
           };
-          const status = get("PlaybackStatus", "s");
-          if (typeof status === "string" && status) entry.status = status;
-          const md = props.lookup_value("Metadata", null);
-          if (md) {
-            // A late reply must not overwrite fuller
-            // metadata that arrived via the payload.
-            const fetched = _unpackMetadata(md);
-            if (fetched["xesam:title"] || !entry.metadata?.["xesam:title"])
-              entry.metadata = fetched;
-          }
-          const pos = get("Position", "x");
-          if (typeof pos === "number") entry.positionUs = pos;
+          // Capabilities merge any time (a payload
+          // carrying them stays authoritative later);
+          // without this, next/prev stay dead whenever
+          // the payload beat this reply.
           for (const [prop, field] of CAN_PROPS) {
             const v = get(prop, "b");
             if (typeof v === "boolean") entry[field] = v;
+          }
+          if (!entry.gotPayload) {
+            const status = get("PlaybackStatus", "s");
+            if (typeof status === "string" && status) entry.status = status;
+            const md = props.lookup_value("Metadata", null);
+            if (md) {
+              const fetched = _unpackMetadata(md);
+              if (fetched["xesam:title"] || !entry.metadata?.["xesam:title"])
+                entry.metadata = fetched;
+            }
+            const pos = get("Position", "x");
+            if (typeof pos === "number") entry.positionUs = pos;
           }
         } catch (e) {
           return;
