@@ -166,7 +166,7 @@
 }
 
 .dn-page-timer {
-  spacing: 8px;
+  spacing: 6px;
 }
 
 .dn-page-clipboard {
@@ -500,7 +500,7 @@
 
 /* Timer strip */
 .dn-timer-strip {
-  padding: 6px 2px;
+  padding: 2px 2px;
   spacing: 14px;
 }
 
@@ -511,9 +511,9 @@
 .dn-timer-entry {
   background-color: rgba(255, 255, 255, 0.1);
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 3px 8px;
   font-size: 9.5pt;
-  min-width: 150px;
+  min-width: 120px;
   selection-background-color: rgba(255, 255, 255, 0.3);
   selected-color: #ffffff;
 }
@@ -525,9 +525,10 @@
 .dn-time-entry {
   background-color: rgba(255, 255, 255, 0.1);
   border-radius: 7px;
-  padding: 4px 6px;
-  font-size: 9.5pt;
-  min-width: 34px;
+  padding: 2px 4px;
+  font-size: 9pt;
+  min-width: 30px;
+  text-align: center;
   selection-background-color: rgba(255, 255, 255, 0.3);
   selected-color: #ffffff;
 }
@@ -606,9 +607,9 @@
 
 .dn-timer-button {
   background-color: rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 5px 12px;
-  font-size: 9.5pt;
+  border-radius: 7px;
+  padding: 2px 8px;
+  font-size: 8.5pt;
   font-weight: 600;
 }
 
@@ -622,6 +623,97 @@
 
 .dn-fg-dark .dn-timer-button:hover {
   background-color: rgba(0, 0, 0, 0.18);
+}
+
+/* ---- Music (MPRIS, Media tab) ----------------------------------------- */
+
+.dn-page-media {
+  spacing: 6px;
+  padding: 10px;
+  border-radius: 14px;
+}
+
+.dn-media-row {
+  spacing: 12px;
+}
+
+.dn-media-content {
+  spacing: 10px;
+  padding: 2px;
+}
+
+.dn-media-empty {
+  spacing: 6px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.dn-fg-dark .dn-media-empty {
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.dn-media-empty-title {
+  font-weight: 600;
+  font-size: 10.5pt;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.dn-fg-dark .dn-media-empty-title {
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.dn-music-art {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+.dn-fg-dark .dn-music-art {
+  background-color: rgba(0, 0, 0, 0.08);
+}
+
+.dn-music-mid {
+  spacing: 3px;
+}
+
+.dn-music-source {
+  font-size: 8pt;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.dn-fg-dark .dn-music-source {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.dn-music-title {
+  font-weight: 600;
+  font-size: 11.5pt;
+}
+
+.dn-music-artist {
+  font-size: 9pt;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.dn-fg-dark .dn-music-artist {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.dn-media-times {
+  spacing: 6px;
+}
+
+.dn-music-time {
+  font-size: 8pt;
+  font-family: monospace;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.dn-fg-dark .dn-music-time {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.dn-music-controls {
+  spacing: 6px;
 }
 
 /* ---- Icon states: quiet gray inactive, near-white hover --------------- */
