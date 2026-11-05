@@ -774,8 +774,10 @@ export default class DynamicNotchExtension extends Extension {
         });
         this._peekTitle = new St.Label({style_class: 'dn-peek-title'});
         this._peekTitle.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+        this._peekTitle.get_clutter_text().set_single_line_mode(true);
         this._peekBody = new St.Label({style_class: 'dn-peek-body'});
         this._peekBody.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+        this._peekBody.get_clutter_text().set_single_line_mode(true);
         peekText.add_child(this._peekTitle);
         peekText.add_child(this._peekBody);
         this._peekView.add_child(peekText);
@@ -3138,8 +3140,11 @@ export default class DynamicNotchExtension extends Extension {
             ? `${this._music.title}|${this._music.artist}` : '';
         const wasAvailable = !!this._music;
         this._music = snap;
-        this._scanTrayIcons();
         this._renderMusic();
+        // The tray scan must never block media rendering.
+        try {
+            this._scanTrayIcons();
+        } catch (_e) {}
         // A genuinely new track surfaces briefly in the notch.
         const nowId = snap ? `${snap.title}|${snap.artist}` : '';
         if (snap && snap.status === 'Playing' && prevId &&
