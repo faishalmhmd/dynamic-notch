@@ -19,6 +19,7 @@ import { CalendarProvider } from "./lib/calendarProvider.js";
 import { SystemEventsProvider } from "./lib/event.js";
 import { ClipboardProvider } from "./lib/clipboard.js";
 import { MusicProvider } from "./lib/musicProvider.js";
+import { scanListeningPorts } from "./lib/portsProvider.js";
 
 const EXPANDED_W = 700;
 const EXPANDED_H = 440;
@@ -112,6 +113,7 @@ const TAB_DEFS = [
   ["timer", "Timer", "alarm-symbolic"],
   ["clipboard", "Clipboard", "edit-paste-symbolic"],
   ["media", "Media", "media-playback-start-symbolic"],
+  ["ports", "Ports", "network-server-symbolic"],
 ];
 
 const PLAYER_NAMES = {
@@ -184,6 +186,7 @@ export default class DynamicNotchExtension extends Extension {
     this._dateMenuContainer = null;
     this._dateMenuOpenId = 0;
     this._dmGuardId = 0;
+    this._portsTimerId = 0;
 
     this._page = "main";
     this._qaButtons = new Map();
@@ -372,6 +375,8 @@ export default class DynamicNotchExtension extends Extension {
     // Providers first: restore stock banners while our actors still exist.
     if (this._dmGuardId) GLib.source_remove(this._dmGuardId);
     this._dmGuardId = 0;
+    if (this._portsTimerId) GLib.source_remove(this._portsTimerId);
+    this._portsTimerId = 0;
     if (this._dateMenu && this._dateMenuOpenId) {
       try {
         this._dateMenu.menu.disconnect(this._dateMenuOpenId);
@@ -603,6 +608,7 @@ export default class DynamicNotchExtension extends Extension {
     this._pageTimer?.destroy();
     this._pageClipboard?.destroy();
     this._pageMedia?.destroy();
+    this._pagePorts?.destroy();
     this._clockWidget?.destroy();
     this._expandedView?.destroy();
     this._backdrop?.destroy();
@@ -645,6 +651,7 @@ export default class DynamicNotchExtension extends Extension {
     this._tabProgressFill = null;
     this._musicSection = null;
     this._pageMedia = null;
+    this._pagePorts = null;
     this._mediaContent = null;
     this._mediaEmpty = null;
     this._musicSource = null;
@@ -1015,6 +1022,8 @@ export default class DynamicNotchExtension extends Extension {
     root.add_child(this._pageMedia);
     this._pageClipboard = this._buildClipboardPage();
     root.add_child(this._pageClipboard);
+    this._pagePorts = this._buildPortsPage();
+    root.add_child(this._pagePorts);
     this._setTab("main");
     return root;
   }
@@ -1193,6 +1202,25 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.EXPANDED || this._state === State.EXPANDING)
       this._applySize(true);
     this._syncQaStates();
+    // The ports view is a live scan: refresh on entry, then
+    // every few seconds while it stays open.
+    if (name === "ports") {
+      this._refreshPortsList();
+      if (!this._portsTimerId) {
+        this._portsTimerId = GLib.timeout_add(
+          GLib.PRIORITY_DEFAULT,
+          4000,
+          () => {
+            if (this._page === "ports" && this._state === State.EXPANDED) {
+              this._refreshPortsList();
+              return GLib.SOURCE_CONTINUE;
+            }
+            this._portsTimerId = 0;
+            return GLib.SOURCE_REMOVE;
+          },
+        );
+      }
+    }
   }
 
   _showPage(name) {
@@ -1203,6 +1231,7 @@ export default class DynamicNotchExtension extends Extension {
       timer: this._pageTimer,
       clipboard: this._pageClipboard,
       media: this._pageMedia,
+      ports: this._pagePorts,
     };
     const incoming = pages[name];
     const outgoing = prev && prev !== name ? pages[prev] : null;
@@ -1982,6 +2011,112 @@ export default class DynamicNotchExtension extends Extension {
     this._clipScroll = scroll;
     page.add_child(scroll);
     return page;
+  }
+
+  _buildPortsPage() {
+    const page = new St.BoxLayout({
+      style_class: "dn-page-ports",
+      orientation: Clutter.Orientation.VERTICAL,
+      y_expand: true,
+      visible: false,
+    });
+    const header = new St.BoxLayout({ style_class: "dn-notif-header" });
+    header.add_child(
+      new St.Icon({
+        icon_name: "network-server-symbolic",
+        icon_size: 16,
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    header.add_child(
+      new St.Label({
+        text: "Listening Ports",
+        style_class: "dn-card-title",
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    this._portsCount = new St.Label({
+      text: "",
+      style_class: "dn-card-body",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    header.add_child(this._portsCount);
+    header.add_child(new St.Widget({ x_expand: true }));
+    const refreshBtn = new St.Button({
+      label: "Refresh",
+      style_class: "dn-small-button",
+    });
+    refreshBtn.connect("clicked", () => this._refreshPortsList());
+    header.add_child(refreshBtn);
+    page.add_child(header);
+    this._portsEmpty = new St.Label({
+      text: "No listening ports",
+      style_class: "dn-card-body",
+    });
+    page.add_child(this._portsEmpty);
+    this._portsList = new St.BoxLayout({
+      style_class: "dn-notif-list",
+      orientation: Clutter.Orientation.VERTICAL,
+    });
+    const scroll = new St.ScrollView({
+      style_class: "dn-notif-scroll",
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+      overlay_scrollbars: true,
+      y_expand: true,
+    });
+    scroll.add_child(this._portsList);
+    page.add_child(scroll);
+    return page;
+  }
+
+  _refreshPortsList() {
+    if (!this._portsList) return;
+    let rows = [];
+    try {
+      rows = scanListeningPorts();
+    } catch (e) {
+      logError(e, "dynamic-notch: port scan failed");
+    }
+    this._portsList.destroy_all_children();
+    this._portsEmpty.visible = rows.length === 0;
+    if (this._portsCount)
+      this._portsCount.text = rows.length ? `· ${rows.length} open` : "";
+    for (const r of rows) this._portsList.add_child(this._makePortRow(r));
+  }
+
+  _makePortRow(r) {
+    const row = new St.BoxLayout({ style_class: "dn-port-row" });
+    row.add_child(
+      new St.Label({
+        text: `${r.port}`,
+        style_class: "dn-port-num",
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    row.add_child(
+      new St.Label({
+        text: r.proto,
+        style_class: "dn-port-proto",
+        y_align: Clutter.ActorAlign.CENTER,
+      }),
+    );
+    const addr = new St.Label({
+      text: r.v6 ? `[${r.addr}]` : r.addr,
+      style_class: "dn-port-addr",
+      x_expand: true,
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    addr.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    row.add_child(addr);
+    const proc = new St.Label({
+      text: r.process || "—",
+      style_class: "dn-port-proc",
+      y_align: Clutter.ActorAlign.CENTER,
+    });
+    proc.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
+    row.add_child(proc);
+    return row;
   }
 
   _refreshClipList() {

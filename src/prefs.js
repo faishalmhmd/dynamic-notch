@@ -45,6 +45,7 @@ const TAB_TITLES = [
   ["timer", "Timer"],
   ["clipboard", "Clipboard"],
   ["media", "Media"],
+  ["ports", "Ports"],
 ];
 
 export default class DynamicNotchPreferences extends ExtensionPreferences {
@@ -283,6 +284,8 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
       ["main", "x-office-calendar-symbolic"],
       ["timer", "alarm-symbolic"],
       ["clipboard", "edit-paste-symbolic"],
+      ["media", "media-playback-start-symbolic"],
+      ["ports", "network-server-symbolic"],
     ];
     for (const [tabId, defIcon] of TAB_ICON_DEFAULTS) {
       const title = TAB_TITLES.find(([x]) => x === tabId)?.[1] ?? tabId;
