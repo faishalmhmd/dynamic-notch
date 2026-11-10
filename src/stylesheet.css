@@ -173,6 +173,38 @@
   spacing: 6px;
 }
 
+.dn-page-ports {
+  spacing: 6px;
+}
+
+.dn-port-row {
+  spacing: 10px;
+  padding: 5px 8px;
+}
+
+.dn-port-num {
+  font-weight: 700;
+  min-width: 52px;
+}
+
+.dn-port-proto {
+  font-size: 8pt;
+  font-weight: 700;
+  text-align: center;
+  min-width: 30px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background-color: rgba(127, 127, 127, 0.28);
+}
+
+.dn-port-proc {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.dn-fg-dark .dn-port-proc {
+  color: rgba(0, 0, 0, 0.55);
+}
+
 .dn-tab-bar {
   spacing: 2px;
   padding-left: 10px;
