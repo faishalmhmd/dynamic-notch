@@ -33,6 +33,44 @@ const EVENT_MS = 2800;
 const MAX_APPS = 12;
 const FILLET_R = 10;
 
+// Spring curves after Ding (MIT, ding.yusufcengiz.dev): closed-form
+// damped spring, 0 -> 1. Morph uses stiffness 340 / damping 27.
+function _springPos(t, k, c, m) {
+  const w0 = Math.sqrt(k / m);
+  const z = c / (2 * Math.sqrt(k * m));
+  if (z < 1) {
+    const wd = w0 * Math.sqrt(1 - z * z);
+    return (
+      1 -
+      Math.exp(-z * w0 * t) *
+        (Math.cos(wd * t) + ((z * w0) / wd) * Math.sin(wd * t))
+    );
+  }
+  if (z === 1) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+  const s = w0 * Math.sqrt(z * z - 1);
+  const r1 = -z * w0 + s;
+  const r2 = -z * w0 - s;
+  return 1 - (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r2 - r1);
+}
+
+// Morph spring duration: its settle time (last t >0.5% from rest).
+const MORPH_SPRING_MS = (() => {
+  let settle = 0.05;
+  for (let t = 0; t <= 2; t += 1 / 120) {
+    if (Math.abs(1 - _springPos(t, 340, 27, 1)) > 0.005) settle = t;
+  }
+  return Math.min(500, Math.round((settle + 1 / 120) * 1000));
+})();
+
+// Lateral shake offset (px): Ding's 520/13 shake spring, kicked
+// gently (v = 70 px/s) so the first swing is only ~2 px.
+function _shakePos(t) {
+  const w0 = Math.sqrt(520);
+  const z = 13 / (2 * w0);
+  const wd = w0 * Math.sqrt(1 - z * z);
+  return (70 / wd) * Math.exp(-z * w0 * t) * Math.sin(wd * t);
+}
+
 const State = {
   COMPACT: "compact",
   EXPANDING: "expanding",
@@ -429,6 +467,8 @@ export default class DynamicNotchExtension extends Extension {
       GLib.source_remove(this._trayGuardId);
       this._trayGuardId = 0;
     }
+    this._stopMorphSpring();
+    this._stopShake();
     for (const [box, sigId] of this._traySignals ?? []) {
       try {
         box.disconnect(sigId);
@@ -1276,6 +1316,7 @@ export default class DynamicNotchExtension extends Extension {
     }
     this._hideTooltip();
     this._syncQaStates();
+    this._syncEqTimer();
   }
 
   _syncQaStates() {
@@ -2070,6 +2111,8 @@ export default class DynamicNotchExtension extends Extension {
     return page;
   }
 
+  // Rows are keyed by proto|addr|port and updated in place;
+  // a full rebuild on every refresh made the list blink.
   _refreshPortsList() {
     if (!this._portsList) return;
     let rows = [];
@@ -2078,11 +2121,31 @@ export default class DynamicNotchExtension extends Extension {
     } catch (e) {
       logError(e, "dynamic-notch: port scan failed");
     }
-    this._portsList.destroy_all_children();
     this._portsEmpty.visible = rows.length === 0;
-    if (this._portsCount)
-      this._portsCount.text = rows.length ? `· ${rows.length} open` : "";
-    for (const r of rows) this._portsList.add_child(this._makePortRow(r));
+    const countText = rows.length ? `· ${rows.length} open` : "";
+    if (this._portsCount && this._portsCount.text !== countText)
+      this._portsCount.text = countText;
+    const stale = new Map();
+    for (const child of this._portsList.get_children())
+      stale.set(child._portKey, child);
+    rows.forEach((r, i) => {
+      const key = `${r.proto}|${r.addr}|${r.port}`;
+      let row = stale.get(key);
+      if (row) {
+        stale.delete(key);
+        if (row._procText !== (r.process || "")) {
+          row._procLabel.text = r.process || "—";
+          row._procText = r.process || "";
+        }
+      } else {
+        row = this._makePortRow(r);
+      }
+      if (this._portsList.get_child_at_index(i) !== row) {
+        if (row.get_parent()) this._portsList.remove_child(row);
+        this._portsList.insert_child_at_index(row, i);
+      }
+    });
+    for (const row of stale.values()) row.destroy();
   }
 
   _makePortRow(r) {
@@ -2116,6 +2179,9 @@ export default class DynamicNotchExtension extends Extension {
     });
     proc.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
     row.add_child(proc);
+    row._portKey = `${r.proto}|${r.addr}|${r.port}`;
+    row._procLabel = proc;
+    row._procText = r.process || "";
     return row;
   }
 
@@ -2726,13 +2792,9 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   _eventDims(monitor) {
-    const h = this._settings.get_int("notch-height");
-    const nat = this._eventNaturalW > 0 ? this._eventNaturalW + 12 : 0;
-    const W = Math.min(
-      Math.max(this._settings.get_int("notch-width"), nat),
-      Math.max(200, monitor.width - 16),
-    );
-    return [W, Math.max(h + 12, 46)];
+    // Events share the notification peek's exact size, so every
+    // transient surface (messages, system, music) is identical.
+    return this._peekDims(monitor);
   }
 
   // Anchor for the wide modes (expanded / peek): same edge the pill
@@ -2919,7 +2981,30 @@ export default class DynamicNotchExtension extends Extension {
     }
 
     const onDone = this._animOnDone;
-    if (animate && this._animationsEnabled()) {
+    const kind = expanded
+      ? "expanded"
+      : peek
+        ? "peek"
+        : evt
+          ? "event"
+          : "compact";
+    const prevKind = this._morphKind ?? "compact";
+    this._morphKind = kind;
+    this._stopMorphSpring();
+    // Morphs into/out of the peek/event surface ride the spring;
+    // anything touching the expanded panel keeps the old ease.
+    const springy =
+      animate &&
+      this._animationsEnabled() &&
+      kind !== "expanded" &&
+      prevKind !== "expanded" &&
+      (kind === "peek" ||
+        kind === "event" ||
+        prevKind === "peek" ||
+        prevKind === "event");
+    if (springy) {
+      this._runMorphSpring(x, y, notchW, notchH, showFillets, onDone);
+    } else if (animate && this._animationsEnabled()) {
       // Kill any running ease first, so rapid toggling reverses instead of stacking.
       this._notch.remove_all_transitions();
       this._notch.ease({
@@ -2966,6 +3051,94 @@ export default class DynamicNotchExtension extends Extension {
       }
       onDone?.();
     }
+
+    // Self-heal: in steady compact state the visible view must
+    // match the flags; never leave a blank black box behind.
+    if (this._state === State.COMPACT) this._syncViews();
+  }
+
+  _stopMorphSpring() {
+    if (this._springSourceId) {
+      GLib.source_remove(this._springSourceId);
+      this._springSourceId = 0;
+    }
+  }
+
+  _stopShake() {
+    if (this._shakeSourceId) {
+      GLib.source_remove(this._shakeSourceId);
+      this._shakeSourceId = 0;
+    }
+  }
+
+  // Peek/event morph on a real spring instead of a fixed easing.
+  // Stepped from a GLib timer: a standalone Clutter.Timeline has
+  // no frame clock without an actor and never advances (v77 bug).
+  _runMorphSpring(x, y, w, h, showFillets, onDone) {
+    const [sx, sy] = this._notch.get_position();
+    const [sw, sh] = this._notch.get_size();
+    this._notch.remove_all_transitions();
+    for (const layer of [this._backdrop, this._clipper])
+      layer.remove_all_transitions();
+    if (
+      Math.abs(sx - x) < 1 &&
+      Math.abs(sy - y) < 1 &&
+      Math.abs(sw - w) < 1 &&
+      Math.abs(sh - h) < 1
+    ) {
+      onDone?.();
+      return;
+    }
+    const startUs = GLib.get_monotonic_time();
+    this._springSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+      const t = (GLib.get_monotonic_time() - startUs) / 1e6;
+      if (t * 1000 >= MORPH_SPRING_MS) {
+        this._springSourceId = 0;
+        this._notch.set_position(x, y);
+        this._notch.set_size(w, h);
+        this._backdrop.set_size(w, h);
+        this._clipper.set_size(w, h);
+        if (showFillets) {
+          this._filletL.set_position(x - FILLET_R, y);
+          this._filletR.set_position(x + w, y);
+        }
+        onDone?.();
+        return GLib.SOURCE_REMOVE;
+      }
+      const f = _springPos(t, 340, 27, 1);
+      const cw = sw + (w - sw) * f;
+      const ch = sh + (h - sh) * f;
+      const cx = sx + (x - sx) * f;
+      const cy = sy + (y - sy) * f;
+      this._notch.set_position(cx, cy);
+      this._notch.set_size(cw, ch);
+      this._backdrop.set_size(cw, ch);
+      this._clipper.set_size(cw, ch);
+      if (showFillets) {
+        this._filletL.set_position(cx - FILLET_R, cy);
+        this._filletR.set_position(cx + cw, cy);
+      }
+      return GLib.SOURCE_CONTINUE;
+    });
+  }
+
+  // Small lateral shake when a peek/event lands: a kicked spring
+  // (520/13, softened) on the notch's translation-x.
+  _shakeNotch() {
+    if (!this._animationsEnabled() || !this._notch) return;
+    if (this._state !== State.COMPACT) return;
+    this._stopShake();
+    const startUs = GLib.get_monotonic_time();
+    this._shakeSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+      const t = (GLib.get_monotonic_time() - startUs) / 1e6;
+      if (t >= 0.5) {
+        this._shakeSourceId = 0;
+        this._notch.set_translation(0, 0, 0);
+        return GLib.SOURCE_REMOVE;
+      }
+      this._notch.set_translation(_shakePos(t), 0, 0);
+      return GLib.SOURCE_CONTINUE;
+    });
   }
 
   // One concave fillet: a notch-colored square with a quarter
@@ -3264,10 +3437,26 @@ export default class DynamicNotchExtension extends Extension {
     } catch (_e) {}
   }
 
+  // The eq loop may run only while the Media tab is actually
+  // on screen; before, it repainted at 30 fps for the whole
+  // playback, panel closed and fullscreen video included.
+  _eqShouldRun() {
+    return (
+      this._music?.status === "Playing" &&
+      this._animationsEnabled() &&
+      this._state === State.EXPANDED &&
+      this._page === "media"
+    );
+  }
+
   _syncEqTimer() {
-    const play = this._music?.status === "Playing" && this._animationsEnabled();
+    const play = this._eqShouldRun();
     if (play && !this._eqTimerId) {
       this._eqTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+        if (!this._eqShouldRun()) {
+          this._eqTimerId = 0;
+          return GLib.SOURCE_REMOVE;
+        }
         this._eqPhase += 0.16;
         for (const a of this._eqAreas ?? []) if (a.visible) a.queue_repaint();
         return GLib.SOURCE_CONTINUE;
@@ -3939,6 +4128,7 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the peek
     this._syncViews();
     this._applySize(true);
+    this._shakeNotch();
   }
 
   _hidePeek() {
@@ -3951,22 +4141,15 @@ export default class DynamicNotchExtension extends Extension {
     this._peekNotification = null;
     this._updateCompactDisplay();
     if (this._state !== State.COMPACT) return;
-    // Content (icon/text/×) fades out first; the box then
-    // finishes shrinking empty instead of dragging content.
+    // Swap the compact content back NOW, not in the morph's
+    // onDone: that callback lives in a single slot and an
+    // interrupted morph drops it, leaving every view hidden
+    // (a blank black notch) until some unrelated sync.
     this._peekView.remove_all_transitions();
-    if (this._animationsEnabled()) {
-      this._peekView.ease({
-        opacity: 0,
-        duration: Math.round(ANIM_MS * 0.45),
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-      });
-    } else {
-      this._peekView.opacity = 0;
-    }
-    this._animOnDone = () => {
-      this._syncViews();
-      if (this._animationsEnabled()) this._fadeInCompact();
-    };
+    this._peekView.opacity = 0;
+    this._animOnDone = null;
+    this._syncViews();
+    if (this._animationsEnabled()) this._fadeInCompact();
     this._applySize(true);
   }
 
@@ -4026,6 +4209,7 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the event
     this._syncViews();
     this._applySize(true);
+    this._shakeNotch();
   }
 
   _hideEvent() {
@@ -4033,19 +4217,10 @@ export default class DynamicNotchExtension extends Extension {
     this._cancelEvent();
     if (!was || this._state !== State.COMPACT) return;
     this._eventView.remove_all_transitions();
-    if (this._animationsEnabled()) {
-      this._eventView.ease({
-        opacity: 0,
-        duration: Math.round(ANIM_MS * 0.45),
-        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
-      });
-    } else {
-      this._eventView.opacity = 0;
-    }
-    this._animOnDone = () => {
-      this._syncViews();
-      if (this._animationsEnabled()) this._fadeInCompact();
-    };
+    this._eventView.opacity = 0;
+    this._animOnDone = null;
+    this._syncViews();
+    if (this._animationsEnabled()) this._fadeInCompact();
     this._applySize(true);
   }
 
@@ -4186,10 +4361,10 @@ export default class DynamicNotchExtension extends Extension {
       x_expand: true,
     });
     const icon = f.gicon
-      ? new St.Icon({ gicon: f.gicon, icon_size: 20 })
+      ? new St.Icon({ gicon: f.gicon, icon_size: 18 })
       : new St.Icon({
           icon_name: "dialog-information-symbolic",
-          icon_size: 20,
+          icon_size: 18,
         });
     icon.y_align = Clutter.ActorAlign.START;
     row.add_child(icon);
