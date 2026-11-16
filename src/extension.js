@@ -25,6 +25,7 @@ const EXPANDED_W = 700;
 const EXPANDED_H = 440;
 const PEEK_W = 480;
 const PEEK_H = 78;
+const EVENT_H = 40;
 const ANIM_MS = 300;
 const PANEL_DEBOUNCE_MS = 100;
 const NOTIF_PEEK_MS = 4500;
@@ -33,43 +34,40 @@ const EVENT_MS = 2800;
 const MAX_APPS = 12;
 const FILLET_R = 10;
 
-// Spring curves after Ding (MIT, ding.yusufcengiz.dev): closed-form
-// damped spring, 0 -> 1. Morph uses stiffness 340 / damping 27.
-function _springPos(t, k, c, m) {
-  const w0 = Math.sqrt(k / m);
-  const z = c / (2 * Math.sqrt(k * m));
-  if (z < 1) {
-    const wd = w0 * Math.sqrt(1 - z * z);
+// Velocity-carrying damped spring (the pattern Isle drives its
+// island with): semi-implicit Euler at 240 Hz substeps, stiffness
+// 155 / damping 18, at rest within 0.25 px and 2 px/s.
+class _Spring {
+  constructor(value) {
+    this.value = value;
+    this.target = value;
+    this.velocity = 0;
+  }
+
+  get settled() {
     return (
-      1 -
-      Math.exp(-z * w0 * t) *
-        (Math.cos(wd * t) + ((z * w0) / wd) * Math.sin(wd * t))
+      Math.abs(this.value - this.target) < 0.25 && Math.abs(this.velocity) < 2
     );
   }
-  if (z === 1) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
-  const s = w0 * Math.sqrt(z * z - 1);
-  const r1 = -z * w0 + s;
-  const r2 = -z * w0 - s;
-  return 1 - (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r2 - r1);
-}
 
-// Morph spring duration: its settle time (last t >0.5% from rest).
-const MORPH_SPRING_MS = (() => {
-  let settle = 0.05;
-  for (let t = 0; t <= 2; t += 1 / 120) {
-    if (Math.abs(1 - _springPos(t, 340, 27, 1)) > 0.005) settle = t;
+  step(dt) {
+    let rem = Math.min(Math.max(dt, 0), 0.25);
+    while (rem > 0 && !this.settled) {
+      const h = Math.min(rem, 1 / 240);
+      const acc = -155 * (this.value - this.target) - 18 * this.velocity;
+      this.velocity += acc * h;
+      this.value += this.velocity * h;
+      rem -= h;
+    }
+    if (this.settled) {
+      this.value = this.target;
+      this.velocity = 0;
+    }
   }
-  return Math.min(500, Math.round((settle + 1 / 120) * 1000));
-})();
-
-// Lateral shake offset (px): Ding's 520/13 shake spring, kicked
-// gently (v = 70 px/s) so the first swing is only ~2 px.
-function _shakePos(t) {
-  const w0 = Math.sqrt(520);
-  const z = 13 / (2 * w0);
-  const wd = w0 * Math.sqrt(1 - z * z);
-  return (70 / wd) * Math.exp(-z * w0 * t) * Math.sin(wd * t);
 }
+
+// Content fades around a morph (out before it, in after it starts).
+const SEQ_FADE_MS = 130;
 
 const State = {
   COMPACT: "compact",
@@ -468,7 +466,7 @@ export default class DynamicNotchExtension extends Extension {
       this._trayGuardId = 0;
     }
     this._stopMorphSpring();
-    this._stopShake();
+    this._cancelSeq();
     for (const [box, sigId] of this._traySignals ?? []) {
       try {
         box.disconnect(sigId);
@@ -927,6 +925,9 @@ export default class DynamicNotchExtension extends Extension {
       icon_size: 18,
       y_align: Clutter.ActorAlign.CENTER,
     });
+    // Symmetric expanding spacers center the icon+text group
+    // in the box (wider than the content at the width floor).
+    this._eventView.add_child(new St.Bin({ x_expand: true }));
     this._eventView.add_child(this._eventIcon);
     this._eventLabel = new St.Label({
       style_class: "dn-event-label",
@@ -934,6 +935,7 @@ export default class DynamicNotchExtension extends Extension {
     });
     this._eventLabel.get_clutter_text().set_ellipsize(Pango.EllipsizeMode.END);
     this._eventView.add_child(this._eventLabel);
+    this._eventView.add_child(new St.Bin({ x_expand: true }));
     this._clipper.add_child(this._eventView);
 
     // --- Expanded view: one fixed layout ---
@@ -2792,9 +2794,16 @@ export default class DynamicNotchExtension extends Extension {
   }
 
   _eventDims(monitor) {
-    // Events share the notification peek's exact size, so every
-    // transient surface (messages, system, music) is identical.
-    return this._peekDims(monitor);
+    // Events hug their content; only notification peeks keep
+    // the full 480x78 (his call, v81). _eventNaturalW is the
+    // content (icon + spacing + label); +36 adds the view's CSS
+    // padding (16 x 2) and a 4 px spare. Floor 208 (his pick):
+    // short events get a little air, their content centered by
+    // the view's spacers; longer content outgrows the floor.
+    // Height: fixed slim 40.
+    const maxW = Math.max(170, monitor.width - 32);
+    const w = Math.min(Math.max((this._eventNaturalW || 0) + 36, 208), maxW);
+    return [Math.round(w), EVENT_H];
   }
 
   // Anchor for the wide modes (expanded / peek): same edge the pill
@@ -2990,7 +2999,6 @@ export default class DynamicNotchExtension extends Extension {
           : "compact";
     const prevKind = this._morphKind ?? "compact";
     this._morphKind = kind;
-    this._stopMorphSpring();
     // Morphs into/out of the peek/event surface ride the spring;
     // anything touching the expanded panel keeps the old ease.
     const springy =
@@ -3005,6 +3013,7 @@ export default class DynamicNotchExtension extends Extension {
     if (springy) {
       this._runMorphSpring(x, y, notchW, notchH, showFillets, onDone);
     } else if (animate && this._animationsEnabled()) {
+      this._stopMorphSpring();
       // Kill any running ease first, so rapid toggling reverses instead of stacking.
       this._notch.remove_all_transitions();
       this._notch.ease({
@@ -3040,6 +3049,7 @@ export default class DynamicNotchExtension extends Extension {
         });
       }
     } else {
+      this._stopMorphSpring();
       this._notch.remove_all_transitions();
       this._notch.set_position(x, y);
       this._notch.set_size(notchW, notchH);
@@ -3057,88 +3067,99 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.COMPACT) this._syncViews();
   }
 
+  // Stops the morph spring driver without firing its completion
+  // callback; the next springy pass re-reads the live geometry,
+  // since another driver may own the actor meanwhile.
   _stopMorphSpring() {
     if (this._springSourceId) {
       GLib.source_remove(this._springSourceId);
       this._springSourceId = 0;
     }
+    this._springOnDone = null;
+    this._springsStale = true;
   }
 
-  _stopShake() {
-    if (this._shakeSourceId) {
-      GLib.source_remove(this._shakeSourceId);
-      this._shakeSourceId = 0;
-    }
-  }
-
-  // Peek/event morph on a real spring instead of a fixed easing.
-  // Stepped from a GLib timer: a standalone Clutter.Timeline has
-  // no frame clock without an actor and never advances (v77 bug).
+  // Peek/event morphs ride velocity-carrying springs stepped from
+  // a 16 ms GLib timer (a bare Clutter.Timeline has no frame clock
+  // in Shell, verified in mutter source). Retargeting mid-flight
+  // keeps the momentum, so an interrupted morph never jolts.
   _runMorphSpring(x, y, w, h, showFillets, onDone) {
-    const [sx, sy] = this._notch.get_position();
-    const [sw, sh] = this._notch.get_size();
     this._notch.remove_all_transitions();
     for (const layer of [this._backdrop, this._clipper])
       layer.remove_all_transitions();
-    if (
-      Math.abs(sx - x) < 1 &&
-      Math.abs(sy - y) < 1 &&
-      Math.abs(sw - w) < 1 &&
-      Math.abs(sh - h) < 1
-    ) {
-      onDone?.();
+    if (!this._springs || this._springsStale) {
+      const [cx, cy] = this._notch.get_position();
+      const [cw, ch] = this._notch.get_size();
+      this._springs = {
+        x: new _Spring(cx),
+        y: new _Spring(cy),
+        w: new _Spring(cw),
+        h: new _Spring(ch),
+      };
+      this._springsStale = false;
+    }
+    const s = this._springs;
+    s.x.target = x;
+    s.y.target = y;
+    s.w.target = w;
+    s.h.target = h;
+    this._springFillets = showFillets;
+    this._springOnDone = onDone;
+    if (s.x.settled && s.y.settled && s.w.settled && s.h.settled) {
+      this._applySpringFrame();
+      const cb = this._springOnDone;
+      this._springOnDone = null;
+      cb?.();
       return;
     }
-    const startUs = GLib.get_monotonic_time();
-    this._springSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
-      const t = (GLib.get_monotonic_time() - startUs) / 1e6;
-      if (t * 1000 >= MORPH_SPRING_MS) {
-        this._springSourceId = 0;
-        this._notch.set_position(x, y);
-        this._notch.set_size(w, h);
-        this._backdrop.set_size(w, h);
-        this._clipper.set_size(w, h);
-        if (showFillets) {
-          this._filletL.set_position(x - FILLET_R, y);
-          this._filletR.set_position(x + w, y);
-        }
-        onDone?.();
-        return GLib.SOURCE_REMOVE;
-      }
-      const f = _springPos(t, 340, 27, 1);
-      const cw = sw + (w - sw) * f;
-      const ch = sh + (h - sh) * f;
-      const cx = sx + (x - sx) * f;
-      const cy = sy + (y - sy) * f;
-      this._notch.set_position(cx, cy);
-      this._notch.set_size(cw, ch);
-      this._backdrop.set_size(cw, ch);
-      this._clipper.set_size(cw, ch);
-      if (showFillets) {
-        this._filletL.set_position(cx - FILLET_R, cy);
-        this._filletR.set_position(cx + cw, cy);
-      }
-      return GLib.SOURCE_CONTINUE;
-    });
+    if (this._springSourceId) return; // driver running; it reads the new targets
+    this._springLastUs = GLib.get_monotonic_time();
+    this._springSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () =>
+      this._stepSprings(),
+    );
   }
 
-  // Small lateral shake when a peek/event lands: a kicked spring
-  // (520/13, softened) on the notch's translation-x.
-  _shakeNotch() {
-    if (!this._animationsEnabled() || !this._notch) return;
-    if (this._state !== State.COMPACT) return;
-    this._stopShake();
-    const startUs = GLib.get_monotonic_time();
-    this._shakeSourceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
-      const t = (GLib.get_monotonic_time() - startUs) / 1e6;
-      if (t >= 0.5) {
-        this._shakeSourceId = 0;
-        this._notch.set_translation(0, 0, 0);
-        return GLib.SOURCE_REMOVE;
-      }
-      this._notch.set_translation(_shakePos(t), 0, 0);
-      return GLib.SOURCE_CONTINUE;
-    });
+  _applySpringFrame() {
+    const s = this._springs;
+    // Snap the applied geometry to whole pixels: fractional
+    // edges leave hairline seams between notch, clipper and
+    // fillets on some frames. The springs stay float inside.
+    const x = Math.round(s.x.value);
+    const y = Math.round(s.y.value);
+    const w = Math.round(s.w.value);
+    const h = Math.round(s.h.value);
+    this._notch.set_position(x, y);
+    this._notch.set_size(w, h);
+    this._backdrop.set_size(w, h);
+    this._clipper.set_size(w, h);
+    if (this._springFillets) {
+      this._filletL.set_position(x - FILLET_R, y);
+      this._filletR.set_position(x + w, y);
+    }
+  }
+
+  _stepSprings() {
+    const s = this._springs;
+    if (!s) {
+      this._springSourceId = 0;
+      return GLib.SOURCE_REMOVE;
+    }
+    const now = GLib.get_monotonic_time();
+    const dt = Math.min((now - this._springLastUs) / 1e6, 0.05);
+    this._springLastUs = now;
+    s.x.step(dt);
+    s.y.step(dt);
+    s.w.step(dt);
+    s.h.step(dt);
+    this._applySpringFrame();
+    if (s.x.settled && s.y.settled && s.w.settled && s.h.settled) {
+      this._springSourceId = 0;
+      const cb = this._springOnDone;
+      this._springOnDone = null;
+      cb?.();
+      return GLib.SOURCE_REMOVE;
+    }
+    return GLib.SOURCE_CONTINUE;
   }
 
   // One concave fillet: a notch-colored square with a quarter
@@ -4075,6 +4096,34 @@ export default class DynamicNotchExtension extends Extension {
 
   // ------------------------------------------------------------ peek
 
+  // Phase sequencing for peek/event entry and exit: the phase
+  // boundaries are armed on GLib timers, which always fire —
+  // never on animation-completion callbacks (v79 blank-box lesson).
+  _cancelSeq() {
+    if (this._seqId) {
+      GLib.source_remove(this._seqId);
+      this._seqId = 0;
+    }
+    this._seqFor = null;
+  }
+
+  _armSeq(kind, ms, fn) {
+    this._cancelSeq();
+    this._seqFor = kind;
+    this._seqId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+      this._seqId = 0;
+      this._seqFor = null;
+      fn();
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  _restoreClockOpacity() {
+    if (!this._clockWidget) return;
+    this._clockWidget.remove_all_transitions();
+    this._clockWidget.opacity = 255;
+  }
+
   _showPeek(
     {
       gicon = null,
@@ -4100,6 +4149,40 @@ export default class DynamicNotchExtension extends Extension {
     this._peekKind = kind;
     if (kind !== "notification") this._peekNotification = null;
     this._cancelEvent();
+    // A newer peek while one is still fading in replaces the
+    // content; the pending phase shows the latest.
+    if (this._peekPending) {
+      this._pendingPeekMs = durationMs;
+      return;
+    }
+    this._cancelSeq();
+    // Sequenced entry: the clock text fades out first at the
+    // compact size, then the box grows into the peek.
+    if (
+      this._animationsEnabled() &&
+      this._state === State.COMPACT &&
+      !this._peekActive &&
+      this._clockWidget?.visible
+    ) {
+      this._peekPending = true;
+      this._pendingPeekMs = durationMs;
+      this._clockWidget.remove_all_transitions();
+      this._clockWidget.ease({
+        opacity: 0,
+        duration: SEQ_FADE_MS,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+      this._armSeq("peek-in", SEQ_FADE_MS, () => {
+        this._peekPending = false;
+        if (this._state !== State.COMPACT) return; // panel took over; the peek is dropped
+        this._showPeekNow(this._pendingPeekMs);
+      });
+      return;
+    }
+    this._showPeekNow(durationMs);
+  }
+
+  _showPeekNow(durationMs) {
     this._peekActive = true;
     // Arm the timeout in every state so a queued peek cannot get stuck.
     if (this._peekTimeoutId) GLib.source_remove(this._peekTimeoutId);
@@ -4119,7 +4202,8 @@ export default class DynamicNotchExtension extends Extension {
       this._peekView.opacity = 0;
       this._peekView.ease({
         opacity: 255,
-        duration: Math.round(ANIM_MS * 0.7),
+        duration: 200,
+        delay: SEQ_FADE_MS,
         mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
       });
     } else {
@@ -4128,7 +4212,6 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the peek
     this._syncViews();
     this._applySize(true);
-    this._shakeNotch();
   }
 
   _hidePeek() {
@@ -4136,20 +4219,50 @@ export default class DynamicNotchExtension extends Extension {
       GLib.source_remove(this._peekTimeoutId);
       this._peekTimeoutId = 0;
     }
+    // Still fading in: cancel the sequence, put the clock back.
+    if (this._peekPending) {
+      this._cancelSeq();
+      this._peekPending = false;
+      this._restoreClockOpacity();
+      return;
+    }
     if (!this._peekActive) return;
-    this._peekActive = false;
     this._peekNotification = null;
     this._updateCompactDisplay();
-    if (this._state !== State.COMPACT) return;
-    // Swap the compact content back NOW, not in the morph's
-    // onDone: that callback lives in a single slot and an
-    // interrupted morph drops it, leaving every view hidden
-    // (a blank black notch) until some unrelated sync.
+    if (this._state !== State.COMPACT) {
+      if (this._seqFor === "peek-out") this._cancelSeq();
+      this._peekActive = false;
+      return;
+    }
+    // Sequenced exit, mirroring the entry: the content fades
+    // out first at full size, then the box shrinks back.
+    if (this._animationsEnabled()) {
+      this._cancelSeq();
+      this._peekView.remove_all_transitions();
+      this._peekView.ease({
+        opacity: 0,
+        duration: SEQ_FADE_MS,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+      this._armSeq("peek-out", SEQ_FADE_MS, () => {
+        this._peekActive = false;
+        this._finishHidePeek();
+      });
+      return;
+    }
+    this._peekActive = false;
+    this._finishHidePeek();
+  }
+
+  _finishHidePeek() {
+    // The view swap is driven by the GLib-armed phase callback
+    // (or runs at once with animations off) — never by the
+    // morph's onDone, which an interrupted morph can drop.
     this._peekView.remove_all_transitions();
     this._peekView.opacity = 0;
     this._animOnDone = null;
     this._syncViews();
-    if (this._animationsEnabled()) this._fadeInCompact();
+    if (this._animationsEnabled()) this._fadeInCompact(140);
     this._applySize(true);
   }
 
@@ -4161,12 +4274,20 @@ export default class DynamicNotchExtension extends Extension {
       this._eventTimeoutId = 0;
     }
     this._eventActive = false;
+    // A pending event entry dies with the event; give back the
+    // clock it was fading out.
+    if (this._seqFor === "event-in") {
+      this._cancelSeq();
+      this._eventPending = false;
+      this._restoreClockOpacity();
+    }
   }
 
   _showEvent({ iconName = null, gicon = null, text = "" }) {
     // Peeks (notification / timer) win; the expanded panel shows all.
     if (
       this._peekActive ||
+      this._peekPending ||
       this._state === State.EXPANDED ||
       this._state === State.EXPANDING
     )
@@ -4182,8 +4303,45 @@ export default class DynamicNotchExtension extends Extension {
       this._eventIcon.visible = false;
     }
     this._eventLabel.text = text;
-    const [, natW] = this._eventView.get_preferred_width(-1);
-    this._eventNaturalW = natW;
+    // Measure the CHILDREN, never the view itself: _applySize
+    // set_size()s the view, and a set size feeds back into its
+    // preferred width — the width grew on every event (v12 bug).
+    const [, labelW] = this._eventLabel.get_preferred_width(-1);
+    let contentW = labelW + 16; // the label's two 8 px gaps
+    if (this._eventIcon.visible) {
+      const [, iconW] = this._eventIcon.get_preferred_width(-1);
+      contentW += iconW + 8; // icon-to-label gap
+    }
+    this._eventNaturalW = contentW;
+    // A newer event while one is still fading in only replaces
+    // the content set above; the pending phase shows it.
+    if (this._eventPending) return;
+    this._cancelSeq();
+    // Sequenced entry, same as the peek: clock fades out first.
+    if (
+      this._animationsEnabled() &&
+      this._state === State.COMPACT &&
+      !this._eventActive &&
+      this._clockWidget?.visible
+    ) {
+      this._eventPending = true;
+      this._clockWidget.remove_all_transitions();
+      this._clockWidget.ease({
+        opacity: 0,
+        duration: SEQ_FADE_MS,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+      this._armSeq("event-in", SEQ_FADE_MS, () => {
+        this._eventPending = false;
+        if (this._state !== State.COMPACT) return; // panel took over; the event is dropped
+        this._showEventNow();
+      });
+      return;
+    }
+    this._showEventNow();
+  }
+
+  _showEventNow() {
     this._eventActive = true;
     if (this._eventTimeoutId) GLib.source_remove(this._eventTimeoutId);
     this._eventTimeoutId = GLib.timeout_add(
@@ -4200,7 +4358,8 @@ export default class DynamicNotchExtension extends Extension {
       this._eventView.opacity = 0;
       this._eventView.ease({
         opacity: 255,
-        duration: Math.round(ANIM_MS * 0.7),
+        duration: 200,
+        delay: SEQ_FADE_MS,
         mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
       });
     } else {
@@ -4209,29 +4368,63 @@ export default class DynamicNotchExtension extends Extension {
     if (this._state === State.COLLAPSING) return; // collapse onDone re-applies size for the event
     this._syncViews();
     this._applySize(true);
-    this._shakeNotch();
   }
 
   _hideEvent() {
+    if (this._eventTimeoutId) {
+      GLib.source_remove(this._eventTimeoutId);
+      this._eventTimeoutId = 0;
+    }
+    // Still fading in: cancel the sequence, put the clock back.
+    if (this._eventPending) {
+      this._cancelSeq();
+      this._eventPending = false;
+      this._restoreClockOpacity();
+      return;
+    }
     const was = this._eventActive;
+    if (!was || this._state !== State.COMPACT) {
+      if (this._seqFor === "event-out") this._cancelSeq();
+      this._cancelEvent();
+      return;
+    }
+    // Sequenced exit, mirroring the peek's.
+    if (this._animationsEnabled()) {
+      this._cancelSeq();
+      this._eventView.remove_all_transitions();
+      this._eventView.ease({
+        opacity: 0,
+        duration: SEQ_FADE_MS,
+        mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
+      });
+      this._armSeq("event-out", SEQ_FADE_MS, () => {
+        this._cancelEvent();
+        this._finishHideEvent();
+      });
+      return;
+    }
     this._cancelEvent();
-    if (!was || this._state !== State.COMPACT) return;
+    this._finishHideEvent();
+  }
+
+  _finishHideEvent() {
     this._eventView.remove_all_transitions();
     this._eventView.opacity = 0;
     this._animOnDone = null;
     this._syncViews();
-    if (this._animationsEnabled()) this._fadeInCompact();
+    if (this._animationsEnabled()) this._fadeInCompact(140);
     this._applySize(true);
   }
 
   // Soften the compact view's pop-in at the end of a peek close.
-  _fadeInCompact() {
+  _fadeInCompact(delay = 0) {
     if (!this._clockWidget || !this._clockWidget.visible) return;
     this._clockWidget.remove_all_transitions();
     this._clockWidget.opacity = 0;
     this._clockWidget.ease({
       opacity: 255,
       duration: 120,
+      delay,
       mode: Clutter.AnimationMode.EASE_OUT_CUBIC,
     });
   }
