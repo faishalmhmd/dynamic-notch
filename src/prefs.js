@@ -91,8 +91,17 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     };
     // Tab icon picker: name entry with a live theme preview;
     // only names that exist in the icon theme are saved.
+    // A stale installed schema may lack this tab's key
+    // (tab-icon-ports, added v72): skip the row instead of
+    // killing the whole Settings window, like _strSetting
+    // already does on the Shell side.
     const iconRow = (tabId, title, defIcon) => {
       const key = `tab-icon-${tabId}`;
+      try {
+        if (!settings.settings_schema?.has_key(key)) return null;
+      } catch (_e) {
+        return null;
+      }
       const row = new Adw.ActionRow({ title });
       const theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default());
       const preview = new Gtk.Image({
@@ -289,7 +298,8 @@ export default class DynamicNotchPreferences extends ExtensionPreferences {
     ];
     for (const [tabId, defIcon] of TAB_ICON_DEFAULTS) {
       const title = TAB_TITLES.find(([x]) => x === tabId)?.[1] ?? tabId;
-      qaGroup.add(iconRow(tabId, `${title} Tab Icon`, defIcon));
+      const row = iconRow(tabId, `${title} Tab Icon`, defIcon);
+      if (row) qaGroup.add(row);
     }
     const tbRows = [];
     const tbRead = () => {
